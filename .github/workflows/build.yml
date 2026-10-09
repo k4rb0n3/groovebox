@@ -25,7 +25,13 @@ jobs:
           Copy-Item build/Groovebox_artefacts/Release/Standalone/Groovebox.exe out/
           Copy-Item INSTALL.txt out/
 
+      - name: Read version
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path CMakeLists.txt -Pattern 'project\(Groovebox VERSION ([0-9.]+)\)').Matches[0].Groups[1].Value
+          "GB_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - uses: actions/upload-artifact@v4
         with:
-          name: Groovebox-Windows
+          name: Groovebox-${{ env.GB_VERSION }}-Windows
           path: out

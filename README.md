@@ -4,7 +4,7 @@ A drum groove instrument for FL Studio built around your own sample folders. Poi
 
 ## Install / update
 
-1. Open the latest successful run under the **Actions** tab, download **Groovebox-Windows** from **Artifacts**, unzip it.
+1. Open the latest successful run under the **Actions** tab, download **Groovebox-<version>-Windows** (e.g. Groovebox-0.5.0-Windows) from **Artifacts**, unzip it.
 2. Close FL Studio, then copy `Groovebox.vst3` into `C:\Program Files\Common Files\VST3\` (replace the old one).
 3. Open FL. Updates normally need no rescan (the version number shows next to the title). When an update changes outputs or parameters (like version 0.2), rescan once: **Options > Manage plugins**, untick **Verify plugins**, click **Find installed plugins**.
 
