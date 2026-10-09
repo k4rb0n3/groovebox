@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Groovebox VERSION 0.4.0)
+project(Groovebox VERSION 0.5.0)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,6 +34,7 @@ juce_add_plugin(Groovebox
 target_sources(Groovebox PRIVATE
     Source/Generator.cpp
     Source/SampleAnalysis.cpp
+    Source/GrooveAnalysis.cpp
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp)
 
@@ -57,7 +58,7 @@ target_link_libraries(Groovebox
 option(CG_BUILD_TESTS "Build the Groovebox test harness" OFF)
 if(CG_BUILD_TESTS)
     juce_add_console_app(GrooveboxTest PRODUCT_NAME "GrooveboxTest")
-    target_sources(GrooveboxTest PRIVATE Tests/TestMain.cpp Source/Generator.cpp Source/SampleAnalysis.cpp
+    target_sources(GrooveboxTest PRIVATE Tests/TestMain.cpp Source/Generator.cpp Source/SampleAnalysis.cpp Source/GrooveAnalysis.cpp
         Source/PluginProcessor.cpp Source/PluginEditor.cpp)
     target_compile_definitions(GrooveboxTest PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0 JUCE_USE_MP3AUDIOFORMAT=1 JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(GrooveboxTest PRIVATE juce::juce_audio_utils juce::juce_audio_formats

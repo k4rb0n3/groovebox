@@ -222,6 +222,28 @@ private:
     GrooveboxProcessor& proc;
 };
 
+// Drop a reference loop or track here: Groovebox extracts its groove.
+class GrooveSlot : public juce::Component, public juce::FileDragAndDropTarget, public juce::SettableTooltipClient
+{
+public:
+    explicit GrooveSlot (GrooveboxProcessor& p) : proc (p) {}
+    void paint (juce::Graphics&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
+    void fileDragEnter (const juce::StringArray&, int, int) override { dragOver = true; repaint(); }
+    void fileDragExit (const juce::StringArray&) override { dragOver = false; repaint(); }
+    void filesDropped (const juce::StringArray&, int, int) override;
+    void choose();
+    std::function<double()> forcedBpm;      // reference BPM box (0 = detect)
+    std::function<void (const juce::String&)> onStatus;
+
+private:
+    GrooveboxProcessor& proc;
+    bool dragOver = false;
+    std::unique_ptr<juce::FileChooser> chooser;
+    void load (const juce::File&);
+};
+
 // Full-window help screen.
 class HelpOverlay : public juce::Component
 {
@@ -289,6 +311,10 @@ private:
     std::vector<std::unique_ptr<cg::LaneRow>> rows;
     cg::LaneEditor laneEditor;
     cg::SongTimeline timeline;
+    cg::GrooveSlot grooveSlot;
+    juce::Slider grooveAmt;
+    cg::NumberBox grooveBpmBox { 0, 300, 0 };
+    int grooveReanalyzeIn = -1; // ticks until the reference is analyzed again at the new BPM
     cg::HelpOverlay help;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::TooltipWindow tooltips { this, 500 };

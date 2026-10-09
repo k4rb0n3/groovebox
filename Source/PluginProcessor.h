@@ -89,6 +89,20 @@ public:
     // (C3 = lane 1 ...). Each note picks up the step settings (pitch, pan, cutoff, start) of the step it sits on.
     std::atomic<bool> pianoRollMode { false };
 
+    //== Groove from a reference (written under `lock`) ===============================
+    cg::Groove groove;               // feel extracted from a reference loop or track
+    float grooveAmount = 0.8f;       // 0..1, how far lanes move towards it
+    juce::File grooveFile;
+    double grooveForcedBpm = 0.0;    // 0 = detect
+    std::atomic<bool> grooveBusy { false };
+    void loadGroove (const juce::File&, double forcedBpm); // analyzes in the background
+    void clearGroove();
+    juce::String grooveMessage;      // last analysis result, for the status line
+    int grooveToken = 0;
+    static juce::String grooveToString (const cg::Groove&);
+    static void grooveFromString (cg::Groove&, const juce::String&);
+    void setGrooveAmount (float a) { const juce::SpinLock::ScopedLockType sl (lock); grooveAmount = juce::jlimit (0.0f, 1.0f, a); }
+
     // Automatable per-lane parameters.
     static juce::String paramId (int lane, const char* what) { return "l" + juce::String (lane + 1) + "_" + what; }
     static float cutoffHz (float norm) { return 20.0f * std::pow (1000.0f, juce::jlimit (0.0f, 1.0f, norm)); }

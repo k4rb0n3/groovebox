@@ -10,6 +10,7 @@ enum Genre
     DrumAndBass, Jungle, Halftime, Trap, HipHop, Downtempo,
     Hybrid, // every lane borrows from a random genre
     Free,   // no genre rules, random densities and placements
+    Reference, // patterns follow where a loaded reference groove plays
     NumGenres
 };
 
@@ -23,6 +24,7 @@ struct GenSettings
     float variation = 0.3f; // 0..1, ghosts, velocity spread, probability < 100%
     float irregular = 0.0f; // 0..1, odd lengths, Euclidean placement, odd rates
     int   bars      = 1;    // loop length the generator writes (1..64 bars); patterns evolve bar by bar
+    const Groove* ref = nullptr; // used by the Reference genre
 };
 
 // Replace a lane's pattern with a new one.

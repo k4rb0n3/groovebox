@@ -125,6 +125,51 @@ float swingFor (Role r, float genreSwing)
 }
 } // namespace
 
+namespace
+{
+// 16-step probability template for a role, read from where the reference plays.
+std::array<float, 16> referenceTemplate (const Groove& gr, Role role)
+{
+    std::array<float, 16> t {};
+    const int band = bandFor (role);
+    auto prob = [&] (int b, int i)
+    {
+        const float p = gr.prob[(size_t) b][(size_t) i];
+        return p >= 0.85f ? 1.0f : p; // played (almost) every bar: always
+    };
+    for (int i = 0; i < 16; ++i)
+    {
+        const float p = prob (band, i);
+        const float acc = gr.accent[(size_t) band][(size_t) i];
+        switch (role)
+        {
+            case Role::Kick: case Role::ClosedHat: case Role::Shaker: case Role::Click:
+                t[(size_t) i] = p; break;
+            case Role::Snare: case Role::Clap:
+                t[(size_t) i] = p * juce::jlimit (0.0f, 1.0f, (acc - 0.45f) / 0.45f); // the loudest mid hits are the backbeat
+                if (t[(size_t) i] > 0.8f) t[(size_t) i] = 1.0f;
+                break;
+            case Role::OpenHat: case Role::Ride:
+                t[(size_t) i] = (i % 2 == 0) ? juce::jmin (0.9f, p * acc * acc) : p * acc * 0.3f; // accented highs
+                break;
+            case Role::Perc: case Role::Rim: case Role::Tom:
+                t[(size_t) i] = p < 0.7f ? p * 0.8f : 0.1f; // the in-between mid hits
+                break;
+            case Role::Bass:
+            {
+                const float low = prob (0, i);
+                t[(size_t) i] = low >= 0.85f ? 0.0f : juce::jmax (low, i % 4 == 2 ? 0.8f : 0.0f); // around the kick
+                break;
+            }
+            default:
+                t[(size_t) i] = i == 0 ? 0.6f : 0.0f;
+                break;
+        }
+    }
+    return t;
+}
+} // namespace
+
 double genreBpm (int g)
 {
     if (g >= 0 && g < kNumTemplateGenres) return kGenres[g].bpm;
@@ -136,6 +181,7 @@ const char* genreName (int g)
     if (g >= 0 && g < kNumTemplateGenres) return kGenres[g].name;
     if (g == Hybrid) return "Hybrid (random mix)";
     if (g == Free)   return "Free (no rules)";
+    if (g == Reference) return "From reference groove";
     return "?";
 }
 
@@ -143,11 +189,14 @@ void generateLane (Lane& lane, const GenSettings& s, juce::Random& rng)
 {
     int g = s.genre;
     const bool freeMode = (g == Free);
+    const bool refMode  = (g == Reference) && s.ref != nullptr && s.ref->valid;
+    if (g == Reference && ! refMode)
+        g = House; // no reference loaded yet
 
     if (g == Hybrid)
         g = rng.nextInt (kNumTemplateGenres);
 
-    const auto& def  = kGenres[freeMode ? 0 : juce::jlimit (0, kNumTemplateGenres - 1, g)];
+    const auto& def  = kGenres[(freeMode || refMode) ? 0 : juce::jlimit (0, kNumTemplateGenres - 1, g)];
     const Role  role = lane.role;
     const int   ri   = (int) role;
 
@@ -159,6 +208,8 @@ void generateLane (Lane& lane, const GenSettings& s, juce::Random& rng)
         for (auto& p : tpl)
             p = rng.nextFloat() < base ? 0.3f + rng.nextFloat() * 0.7f : 0.0f;
     }
+    else if (refMode)
+        tpl = referenceTemplate (*s.ref, role);
     else
     {
         const char* pat = def.pat[ri] != nullptr ? def.pat[ri] : kFallback[ri];
@@ -179,7 +230,8 @@ void generateLane (Lane& lane, const GenSettings& s, juce::Random& rng)
     if (role == Role::Kick && g != IDM && ! freeMode)
         irrChance = irr > 0.6f ? (irr - 0.6f) * 2.0f : 0.0f; // keep the four-on-the-floor unless pushed hard
 
-    const float genreSwing = freeMode ? rng.nextFloat() * 0.4f : def.swing;
+    if (refMode) irr = juce::jmin (irr, 0.5f); // the reference is the grid; keep most lanes straight
+    const float genreSwing = freeMode ? rng.nextFloat() * 0.4f : (refMode ? 0.0f : def.swing); // the groove brings the timing
     lane.swing    = juce::jlimit (0.0f, 0.75f, swingFor (role, genreSwing) + (rng.nextFloat() - 0.5f) * var * 0.08f);
     lane.humanize = juce::jlimit (0.0f, 1.0f, 0.08f + var * 0.3f);
     lane.choke    = (role == Role::ClosedHat || role == Role::OpenHat) ? 1 : 0;

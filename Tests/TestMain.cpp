@@ -1,6 +1,7 @@
 // Headless checks for Groovebox: library scan, generation, rendering, MIDI export, state, UI snapshot.
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
+#include "../Source/GrooveAnalysis.h"
 
 struct FakeHead : juce::AudioPlayHead
 {
@@ -495,6 +496,121 @@ int main (int argc, char** argv)
         CHECK (p.undo() && p.lanes[3].steps[0].on != edited, "undo reverts a single step edit");
     }
 
+    // 20. Groove from a reference
+    {
+        // Synthesize 8 bars at 124 BPM: kicks on the beats, snares on 2 and 4, hats on every 16th with the
+        // odd 16ths 30% of a step late (a swung feel) and the offbeat 8ths accented.
+        const double rate = 44100.0, bpmRef = 124.0, stepSec = 60.0 / bpmRef / 4.0;
+        const int total = (int) (rate * stepSec * 16 * 8);
+        juce::AudioBuffer<float> loop (1, total);
+        loop.clear();
+        juce::Random nr (7);
+        auto* d = loop.getWritePointer (0);
+        auto addHit = [&] (double tSec, int kind, float gain)
+        {
+            const int s0 = (int) (tSec * rate);
+            const int len = (int) (rate * (kind == 0 ? 0.25 : kind == 1 ? 0.15 : 0.04));
+            float prev = 0.0f;
+            for (int i = 0; i < len && s0 + i < total; ++i)
+            {
+                const float t = (float) i / (float) rate;
+                float v;
+                if (kind == 0) v = std::sin (juce::MathConstants<float>::twoPi * (50.0f + 120.0f * std::exp (-t * 40.0f)) * t) * std::exp (-t * 14.0f);
+                else if (kind == 1) v = (nr.nextFloat() * 2.0f - 1.0f) * std::exp (-t * 30.0f) * 0.6f
+                                        + std::sin (juce::MathConstants<float>::twoPi * 220.0f * t) * std::exp (-t * 25.0f) * 0.4f;
+                else { const float w = nr.nextFloat() * 2.0f - 1.0f; v = (w - prev) * 0.5f * std::exp (-t * 120.0f); prev = w; }
+                d[s0 + i] += v * gain;
+            }
+        };
+        for (int bar = 0; bar < 8; ++bar)
+            for (int s = 0; s < 16; ++s)
+            {
+                const double t0 = (bar * 16 + s) * stepSec;
+                if (s % 4 == 0) addHit (t0, 0, 0.9f);
+                if (s == 4 || s == 12) addHit (t0, 1, 0.7f);
+                const double late = (s % 2 == 1) ? 0.3 * stepSec : 0.0;
+                addHit (t0 + late, 2, s % 4 == 2 ? 0.8f : 0.35f);
+            }
+
+        const auto g = cg::analyzeGroove (loop.getReadPointer (0), total, rate, 0.0, 120.0, "test");
+        std::cout << "  " << cg::describeGroove (g) << "\n";
+        for (int b = 0; b < 3; ++b)
+        {
+            juce::String line = "  band " + juce::String (b) + ":";
+            for (int s = 0; s < 16; ++s)
+                line << " " << (g.has[(size_t) b][(size_t) s] ? juce::String (g.offset[(size_t) b][(size_t) s], 2) : juce::String ("  . "));
+            std::cout << line << "\n";
+        }
+        CHECK (g.valid && std::abs (g.bpm - bpmRef) < 1.0, "reference tempo detected (" + juce::String (g.bpm, 2) + " BPM)");
+        CHECK (g.prob[0][0] > 0.8f && g.prob[0][4] > 0.8f && g.prob[0][8] > 0.8f && g.prob[0][12] > 0.8f
+               && g.prob[0][2] < 0.3f && g.prob[0][6] < 0.3f, "kicks found on the beats, bar start found");
+        float odd = 0.0f, even = 0.0f;
+        for (int s = 0; s < 16; ++s) (s % 2 ? odd : even) += g.offset[2][(size_t) s] / 8.0f;
+        CHECK (odd > 0.2f && odd < 0.4f && std::abs (even) < 0.08f,
+               "hat swing measured (odd 16ths +" + juce::String (odd, 2) + " steps, even " + juce::String (even, 2) + ")");
+        CHECK (g.accent[2][2] > g.accent[2][1] + 0.2f, "offbeat hat accents measured");
+
+        // A reference that starts mid-bar (one beat plus a bit in) still finds bar 1 from the backbeat.
+        const int skip = (int) (rate * (stepSec * 4 + 0.03));
+        const auto gm = cg::analyzeGroove (loop.getReadPointer (0) + skip, total - skip, rate, 0.0, 120.0, "test");
+        CHECK (gm.accent[1][4] > gm.accent[1][0] + 0.25f && gm.accent[1][12] > gm.accent[1][8] + 0.25f && std::abs (gm.offset[2][1] - g.offset[2][1]) < 0.05f,
+               "reference starting mid-bar: loudest mids still on 2 and 4, same swing");
+
+        // Half-tempo hint picks the half-tempo reading.
+        const auto gh = cg::analyzeGroove (loop.getReadPointer (0), total, rate, 0.0, 64.0, "test");
+        CHECK (std::abs (gh.bpm - bpmRef / 2.0) < 1.0, "half/double tempo follows the host tempo hint (" + juce::String (gh.bpm, 1) + ")");
+
+        const auto gn = cg::analyzeGroove (loop.getReadPointer (0), total, rate, 0.0, 174.0, "test");
+        CHECK (std::abs (gn.bpm - bpmRef) < 1.0, "a host tempo far from the reference doesn't fool detection (" + juce::String (gn.bpm, 1) + ")");
+
+        // Load from a file through the processor.
+        auto wav = outDir.getChildFile ("ref-loop.wav");
+        wav.deleteFile();
+        {
+            juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (wav), rate, 1, 16, {}, 0));
+            w->writeFromAudioSampleBuffer (loop, 0, total);
+        }
+        p.lastBpm = 124.0;
+        p.loadGroove (wav, 0.0);
+        CHECK (p.groove.valid && std::abs (p.groove.bpm - bpmRef) < 1.0 && p.grooveFile == wav, "groove loaded from a file");
+
+        // Applying the groove moves a hat on an odd 16th late; kicks on the beat stay put.
+        cg::Lane hat;
+        hat.role = cg::Role::ClosedHat;
+        hat.length = 16;
+        hat.humanize = 0.0f;
+        hat.swing = 0.0f;
+        hat.steps[1].on = true;
+        hat.steps[4].on = true;
+        std::vector<double> plain, grooved;
+        cg::collectEvents (hat, 0, 1, 0.0, 4.0, 124.0, 1.0f, 0.0f, [&] (double t, float, const cg::Step&, double) { plain.push_back (t); });
+        cg::collectEvents (hat, 0, 1, 0.0, 4.0, 124.0, 1.0f, 0.0f, [&] (double t, float, const cg::Step&, double) { grooved.push_back (t); },
+                           -1, &p.groove, 1.0f);
+        CHECK (plain.size() == 2 && grooved.size() == 2 && grooved[0] - plain[0] > 0.05 * 0.25 * 4 && std::abs (grooved[1] - plain[1]) < 0.02,
+               "groove shifts the odd hat late (" + juce::String ((grooved[0] - plain[0]) / 0.25, 2) + " steps) and leaves the beat");
+
+        // Generating from the reference.
+        p.gen.genre = cg::Reference;
+        p.gen.irregular = 0.0f;
+        p.gen.bars = 1;
+        cg::Lane kick;
+        kick.role = cg::Role::Kick;
+        juce::Random gr (3);
+        cg::generateLane (kick, p.gen, gr);
+        CHECK (kick.steps[0].on && kick.steps[4].on && kick.steps[8].on && kick.steps[12].on && ! kick.steps[2].on,
+               "From reference groove: kick pattern follows the reference (" + laneString (kick) + ")");
+
+        // Saved with the state.
+        auto xml = p.createStateXml();
+        GrooveboxProcessor s3;
+        s3.runSynchronously = true;
+        s3.applyStateXml (*xml);
+        CHECK (s3.groove.valid && std::abs (s3.groove.offset[2][1] - p.groove.offset[2][1]) < 0.001f
+               && std::abs (s3.grooveAmount - p.grooveAmount) < 0.001f, "groove restored from saved state");
+        p.gen.genre = cg::House;
+    }
+
     // 8. UI snapshot
     if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr)
     {
@@ -504,6 +620,7 @@ int main (int argc, char** argv)
         q.makeSong (64);
         q.songMode = true;
         q.previewPlaying = true;
+        q.loadGroove (outDir.getChildFile ("ref-loop.wav"), 0.0);
         FakeHead h2;
         h2.playing = false;
         q.setPlayHead (&h2);

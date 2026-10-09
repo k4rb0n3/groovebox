@@ -111,6 +111,31 @@ struct Lane
     double stepBeats() const { return rates()[(size_t) juce::jlimit (0, (int) rates().size() - 1, rate)].beats; }
 };
 
+// The "feel" extracted from a reference recording, per frequency band and per 16th of a bar.
+// Band 0 = lows (kick, bass, toms), 1 = mids (snare, clap, perc...), 2 = highs (hats, ride, shaker...).
+struct Groove
+{
+    bool valid = false;
+    juce::String name;
+    double bpm = 0.0;
+    int bars = 0;
+    std::array<std::array<float, 16>, 3> prob {};   // how often each band hits on each 16th (0..1)
+    std::array<std::array<float, 16>, 3> offset {}; // where it lands, in steps (-0.4..0.4, + = late)
+    std::array<std::array<float, 16>, 3> accent {}; // how loud, relative (0..1)
+    std::array<std::array<bool, 16>, 3> has {};     // whether there was data for that slot
+};
+
+inline int bandFor (Role r)
+{
+    switch (r)
+    {
+        case Role::Kick: case Role::Bass: case Role::Tom: return 0;
+        case Role::ClosedHat: case Role::OpenHat: case Role::Ride: case Role::Cymbal:
+        case Role::Shaker: case Role::Click: return 2;
+        default: return 1;
+    }
+}
+
 // Which steps of a lane are visible on a given page: { first step, count }.
 // Lanes up to 64 steps always show whole; longer lanes are shown 64 steps per page.
 inline std::pair<int, int> viewWindow (const Lane& lane, int page)
@@ -138,12 +163,15 @@ inline float hash01 (juce::uint32 seed, int lane, juce::int64 k, int salt)
 }
 
 // Calls fn(ppqTime, velocity, step, gridTime) for every hit. gridTime is where the step sits on
-// the grid before swing, nudge and humanize (used to decide which song section a hit belongs to). of this lane in [from, to).
+// the grid before swing, nudge and humanize (used to decide which song section a hit belongs to).
 template <typename Fn>
 void collectEvents (const Lane& lane, int laneIndex, juce::uint32 seed, double from, double to,
                     double bpm, float swingScale, float humanizeScale, Fn&& fn,
-                    juce::int64 clipSteps = -1) // >= 0: emit steps 0..clipSteps-1 once each, ignoring the window
+                    juce::int64 clipSteps = -1, // >= 0: emit steps 0..clipSteps-1 once each, ignoring the window
+                    const Groove* groove = nullptr, float grooveAmount = 0.0f)
 {
+    const bool useGroove = groove != nullptr && groove->valid && grooveAmount > 0.0f;
+    const int band = bandFor (lane.role);
     const double sb  = lane.stepBeats();
     const int    len = juce::jlimit (1, kMaxSteps, lane.length);
 
@@ -174,6 +202,31 @@ void collectEvents (const Lane& lane, int laneIndex, juce::uint32 seed, double f
             const double jitterSec = ((double) hash01 (seed, laneIndex, k, 2) * 2.0 - 1.0) * hum * 0.010;
             t += jitterSec * bpm / 60.0;
             vel *= 1.0f + (hash01 (seed, laneIndex, k, 3) * 2.0f - 1.0f) * hum * 0.22f;
+        }
+
+        // Reference groove: shift each hit towards where the reference plays that 16th, and accent like it.
+        if (useGroove)
+        {
+            const double g16 = (double) k * sb / 0.25;
+            const double r16 = std::round (g16);
+            if (std::abs (g16 - r16) < 0.26)
+            {
+                const int slot = (int) ((((juce::int64) r16) % 16 + 16) % 16);
+                const auto& off = groove->offset[(size_t) band];
+                const auto& has = groove->has[(size_t) band];
+                // Slots this band never played borrow the timing of the other bands at that 16th.
+                float o = off[(size_t) slot];
+                if (! has[(size_t) slot])
+                {
+                    float sum = 0.0f; int cnt = 0;
+                    for (int b = 0; b < 3; ++b)
+                        if (groove->has[(size_t) b][(size_t) slot]) { sum += groove->offset[(size_t) b][(size_t) slot]; ++cnt; }
+                    o = cnt > 0 ? sum / (float) cnt : 0.0f;
+                }
+                t += (double) o * 0.25 * grooveAmount; // offsets are in 16ths, a 16th is 0.25 beats
+                if (has[(size_t) slot])
+                    vel *= 1.0f + (0.55f + 0.9f * groove->accent[(size_t) band][(size_t) slot] - 1.0f) * grooveAmount;
+            }
         }
 
         vel = juce::jlimit (0.02f, 1.0f, vel);

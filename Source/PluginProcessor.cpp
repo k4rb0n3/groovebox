@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "GrooveAnalysis.h"
 
 using namespace cg;
 
@@ -88,6 +89,7 @@ GrooveboxProcessor::GrooveboxProcessor()
     }
 
     midiOut.ensureSize (8192);
+    gen.ref = &groove;
     songMask.fill (0xffffffffu);
     seed = (juce::uint32) juce::Random::getSystemRandom().nextInt();
     initDefaultLanes();
@@ -386,7 +388,8 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
                                    return; // this lane rests in this part of the song
                                const int off = juce::jlimit (0, n - 1, (int) ((t - ppq) / beatsPerSample));
                                fire (li, v, off, st, sb);
-                           });
+                           },
+                           -1, &groove, grooveAmount);
         }
     }
 
@@ -590,6 +593,99 @@ juce::Array<juce::File> GrooveboxProcessor::listAudioFiles (const juce::File& fo
     NaturalFileOrder order;
     files.sort (order);
     return files;
+}
+
+//==============================================================================
+juce::String GrooveboxProcessor::grooveToString (const cg::Groove& g)
+{
+    juce::String s;
+    for (int b = 0; b < 3; ++b)
+        for (int i = 0; i < 16; ++i)
+            s << juce::String (g.prob[(size_t) b][(size_t) i], 4) << ':' << juce::String (g.offset[(size_t) b][(size_t) i], 4) << ':'
+              << juce::String (g.accent[(size_t) b][(size_t) i], 4) << ':' << (g.has[(size_t) b][(size_t) i] ? 1 : 0) << ',';
+    return s;
+}
+
+void GrooveboxProcessor::grooveFromString (cg::Groove& g, const juce::String& str)
+{
+    juce::StringArray items;
+    items.addTokens (str, ",", "");
+    items.removeEmptyStrings();
+    if (items.size() < 48) { g.valid = false; return; }
+    for (int k = 0; k < 48; ++k)
+    {
+        juce::StringArray f;
+        f.addTokens (items[k], ":", "");
+        const auto b = (size_t) (k / 16), i = (size_t) (k % 16);
+        g.prob[b][i]   = juce::jlimit (0.0f, 1.0f, f[0].getFloatValue());
+        g.offset[b][i] = juce::jlimit (-0.4f, 0.4f, f[1].getFloatValue());
+        g.accent[b][i] = juce::jlimit (0.0f, 1.0f, f[2].getFloatValue());
+        g.has[b][i]    = f[3].getIntValue() != 0;
+    }
+    g.valid = true;
+}
+
+void GrooveboxProcessor::loadGroove (const juce::File& file, double forcedBpm)
+{
+    if (! file.existsAsFile())
+        return;
+
+    const int token = ++grooveToken;
+    const double hint = lastBpm.load();
+    auto apply = [this, file, forcedBpm, token] (const cg::Groove& g)
+    {
+        grooveBusy = false;
+        if (token != grooveToken) return; // superseded
+        {
+            const juce::SpinLock::ScopedLockType sl (lock);
+            grooveFile = file;
+            grooveForcedBpm = forcedBpm;
+            if (g.valid) groove = g;
+        }
+        if (g.valid)
+        {
+            // The reference brings its own timing, so the global swing steps aside.
+            if (auto* p = apvts.getParameter ("swing")) p->setValueNotifyingHost (p->convertTo0to1 (0.0f));
+            previewBpm = juce::jlimit (40.0, 300.0, g.bpm);
+        }
+        grooveMessage = g.valid ? "Groove from " + g.name + ": " + cg::describeGroove (g)
+                                : "Couldn't find a groove in " + file.getFileName() + " (try a drum loop, or set its BPM)";
+        ++modelVersion;
+    };
+
+    grooveBusy = true;
+    if (runSynchronously)
+    {
+        apply (cg::analyzeGrooveFile (formats, file, forcedBpm, hint));
+        return;
+    }
+
+    ++ioBusy;
+    auto aliveFlag = alive;
+    io.addJob ([this, aliveFlag, file, forcedBpm, hint, apply]
+    {
+        juce::AudioFormatManager fm; // own manager: formats is used on the message thread
+        fm.registerBasicFormats();
+        const auto g = cg::analyzeGrooveFile (fm, file, forcedBpm, hint);
+        juce::MessageManager::callAsync ([aliveFlag, this, g, apply]
+        {
+            if (! aliveFlag->load()) return;
+            --ioBusy;
+            apply (g);
+        });
+    });
+}
+
+void GrooveboxProcessor::clearGroove()
+{
+    ++grooveToken;
+    {
+        const juce::SpinLock::ScopedLockType sl (lock);
+        groove = cg::Groove {};
+        grooveFile = juce::File();
+        grooveForcedBpm = 0.0;
+    }
+    ++modelVersion;
 }
 
 void GrooveboxProcessor::setLaneFolder (int li, const juce::File& folder, bool guessRoleFromName, const juce::File& preferredFile)
@@ -1082,7 +1178,8 @@ juce::File GrooveboxProcessor::exportMidi()
                                {
                                    if (laneActiveAtBar (li, (int) std::floor (grid / 4.0 + 1.0e-9)))
                                        events.push_back ({ juce::jlimit (0.0, total - 1.0 / 960.0, t), v, kBaseNote + li });
-                               });
+                               },
+                               -1, &groove, grooveAmount);
                 continue;
             }
             const auto clipSteps = (juce::int64) std::ceil (total / lane.stepBeats() - 1.0e-9);
@@ -1093,7 +1190,7 @@ juce::File GrooveboxProcessor::exportMidi()
                                if (t < 0.0) t += total;
                                events.push_back ({ juce::jmin (t, total - 1.0 / 960.0), v, kBaseNote + li });
                            },
-                           clipSteps);
+                           clipSteps, &groove, grooveAmount);
         }
     }
 
@@ -1203,6 +1300,16 @@ std::unique_ptr<juce::XmlElement> GrooveboxProcessor::createStateXml()
     }
 
     const juce::SpinLock::ScopedLockType sl (lock);
+    xml.setAttribute ("grooveAmount", grooveAmount);
+    xml.setAttribute ("grooveFile", grooveFile.getFullPathName());
+    xml.setAttribute ("grooveForcedBpm", grooveForcedBpm);
+    if (groove.valid)
+    {
+        xml.setAttribute ("grooveName", groove.name);
+        xml.setAttribute ("grooveBpm", groove.bpm);
+        xml.setAttribute ("grooveBars", groove.bars);
+        xml.setAttribute ("grooveData", grooveToString (groove));
+    }
     xml.setAttribute ("numLanes", numLanes.load());
     for (int li = 0; li < numLanes; ++li)
     {
@@ -1294,6 +1401,22 @@ void GrooveboxProcessor::applyStateXml (const juce::XmlElement& xmlRef)
     libraryRoot   = juce::File (xml->getStringAttribute ("library"));
     exportBars    = juce::jlimit (1, 64, xml->getIntAttribute ("exportBars", 4));
     fitFilter     = xml->getBoolAttribute ("fitFilter", false);
+    {
+        cg::Groove g;
+        if (xml->hasAttribute ("grooveData"))
+        {
+            g.name = xml->getStringAttribute ("grooveName");
+            g.bpm  = xml->getDoubleAttribute ("grooveBpm", 0.0);
+            g.bars = xml->getIntAttribute ("grooveBars", 0);
+            grooveFromString (g, xml->getStringAttribute ("grooveData"));
+        }
+        ++grooveToken;
+        const juce::SpinLock::ScopedLockType sl (lock);
+        groove = g;
+        grooveAmount    = juce::jlimit (0.0f, 1.0f, (float) xml->getDoubleAttribute ("grooveAmount", 0.8));
+        grooveFile      = juce::File (xml->getStringAttribute ("grooveFile"));
+        grooveForcedBpm = xml->getDoubleAttribute ("grooveForcedBpm", 0.0);
+    }
 
     struct Pending { juce::File folder, file; };
     std::vector<Pending> pending;

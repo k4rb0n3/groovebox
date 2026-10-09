@@ -1215,6 +1215,110 @@ void LaneEditor::resized()
 }
 
 //==============================================================================
+//==============================================================================
+void GrooveSlot::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (kRow);
+    g.fillRoundedRectangle (r, 3.0f);
+    g.setColour (dragOver ? kAccent : juce::Colour (0xff3a3f47));
+    g.drawRoundedRectangle (r, 3.0f, dragOver ? 1.5f : 1.0f);
+
+    Groove gr;
+    {
+        const juce::SpinLock::ScopedLockType sl (proc.lock);
+        gr = proc.groove;
+    }
+
+    auto inner = getLocalBounds().reduced (6, 2);
+    g.setFont (juce::FontOptions (11.0f));
+    if (proc.grooveBusy.load())
+    {
+        g.setColour (kDim);
+        g.drawText ("Listening to the reference...", inner, juce::Justification::centredLeft, true);
+        return;
+    }
+    if (! gr.valid)
+    {
+        g.setColour (kDim);
+        g.drawText ("Groove: drop a loop or track here", inner, juce::Justification::centredLeft, true);
+        return;
+    }
+
+    // 16 columns, three bands: bar height = how often, tick position = early/late.
+    auto viz = inner.removeFromRight (16 * 7).toFloat();
+    const float rowH = viz.getHeight() / 3.0f;
+    static const juce::uint32 bandCol[] = { 0xffd06a5a, 0xffd0a35a, 0xff6ab4d0 };
+    for (int b = 0; b < 3; ++b)
+        for (int i = 0; i < 16; ++i)
+        {
+            const auto cell = juce::Rectangle<float> (viz.getX() + (float) i * 7.0f, viz.getY() + (float) b * rowH, 6.0f, rowH - 1.0f);
+            g.setColour (juce::Colour (i % 4 == 0 ? 0xff30343b : 0xff2a2d33));
+            g.fillRect (cell);
+            const float p = gr.prob[(size_t) b][(size_t) i];
+            if (p <= 0.0f) continue;
+            const float x = cell.getCentreX() + gr.offset[(size_t) b][(size_t) i] * 7.0f;
+            g.setColour (juce::Colour (bandCol[b]).withAlpha (0.35f + 0.65f * juce::jmin (1.0f, p)));
+            g.fillRect (juce::Rectangle<float> (x - 1.5f, cell.getBottom() - cell.getHeight() * juce::jmax (0.25f, juce::jmin (1.0f, p)),
+                                                3.0f, cell.getHeight() * juce::jmax (0.25f, juce::jmin (1.0f, p))));
+        }
+
+    inner.removeFromRight (6);
+    g.setColour (kText);
+    g.drawText ("Groove: " + gr.name, inner.removeFromTop (inner.getHeight() / 2), juce::Justification::bottomLeft, true);
+    g.setColour (kDim);
+    g.setFont (juce::FontOptions (10.0f));
+    g.drawText (juce::String (juce::roundToInt (gr.bpm)) + " BPM, " + juce::String (gr.bars) + " bars", inner,
+                juce::Justification::topLeft, true);
+}
+
+void GrooveSlot::load (const juce::File& f)
+{
+    if (! f.existsAsFile()) return;
+    proc.loadGroove (f, forcedBpm ? forcedBpm() : 0.0);
+    if (onStatus) onStatus ("Listening to " + f.getFileName() + "...");
+    repaint();
+}
+
+void GrooveSlot::filesDropped (const juce::StringArray& files, int, int)
+{
+    dragOver = false;
+    if (! files.isEmpty()) load (juce::File (files[0]));
+    repaint();
+}
+
+void GrooveSlot::choose()
+{
+    chooser = std::make_unique<juce::FileChooser> ("Reference loop or track", proc.grooveFile.existsAsFile() ? proc.grooveFile : juce::File(),
+                                                   proc.formats.getWildcardForAllFormats());
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this] (const juce::FileChooser& fc) { load (fc.getResult()); });
+}
+
+void GrooveSlot::mouseUp (const juce::MouseEvent& e)
+{
+    if (! e.mods.isPopupMenu())
+    {
+        choose();
+        return;
+    }
+    juce::PopupMenu m;
+    m.addItem (1, "Load reference...");
+    m.addItem (2, "Analyze again", proc.grooveFile.existsAsFile());
+    m.addItem (3, "Clear groove", proc.groove.valid);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [this] (int r)
+    {
+        if (r == 1) choose();
+        if (r == 2) load (proc.grooveFile);
+        if (r == 3)
+        {
+            proc.clearGroove();
+            if (onStatus) onStatus ("Groove cleared");
+            repaint();
+        }
+    });
+}
+
 void SongTimeline::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
@@ -1340,6 +1444,18 @@ HelpOverlay::HelpOverlay()
        "which lanes play in each (the kick drops out in the last bar of a build). It follows FL's song position, so press Play from the start "
        "of the song. Lanes that sit out the current section are dimmed. To piano roll and Save MIDI export the whole arrangement.");
 
+    h ("Groove from a reference");
+    p ("Drop a drum loop, or a whole track you love, on the Groove box above the lanes (or click it to choose a file). "
+       "Groovebox listens to it, finds its tempo and bar, and measures for every 16th how early or late and how loud its "
+       "lows (kick, bass), mids (snare, clap, perc) and highs (hats, shakers, ride) play. The little grid shows what it found: "
+       "red lows, orange mids, blue highs; a bar left or right of centre means early or late.\n"
+       "Your lanes then move towards that feel, each lane following its own band. Groove sets how far (0 = off). "
+       "Global swing is set to 0 when a groove loads, because the reference brings its own swing.\n"
+       "Pick the genre \"From reference groove\" and press Generate to also write patterns from where the reference hits.\n"
+       "Tempo is detected automatically; if it picks half or double, drag the Ref box to the real tempo and it listens again. "
+       "Loops that start on the downbeat work best. Right-click the Groove box to analyze again or clear it. "
+       "The feel goes along into To piano roll and Save MIDI.");
+
     h ("Tempo");
     p ("When FL plays, Groovebox follows FL's tempo, so set FL's tempo to suit the genre. The BPM box sets the tempo for Groovebox's own Play button.");
 
@@ -1396,7 +1512,7 @@ void MidiDragButton::mouseDrag (const juce::MouseEvent& e)
 
 //==============================================================================
 GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
-    : AudioProcessorEditor (&p), proc (p), dragMidiBtn (p), laneEditor (p, view), timeline (p)
+    : AudioProcessorEditor (&p), proc (p), dragMidiBtn (p), laneEditor (p, view), timeline (p), grooveSlot (p)
 {
     setLookAndFeel (&look);
     proc.editorEverOpened = true;
@@ -1423,7 +1539,8 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
              &title, &byline, &status, &bpmLabel, &pageLabel, &helpBtn, &setupsBtn, &libraryBtn, &shuffleBtn, &fitFilterBtn,
              &generateBtn, &mutateBtn, &previewBtn, &seqBtn, &saveMidiBtn, &dragMidiBtn, &genreBox, &barsBox, &loopBox,
              &songLenBox, &songBtn, &makeSongBtn, &pagePrev, &pageNext, &followBtn, &editorBtn, &density, &variation,
-             &irregular, &mutateAmt, &swingScale, &humScale, &master, &bpmBox, &viewport, &laneEditor, &timeline, &pianoModeBtn })
+             &irregular, &mutateAmt, &swingScale, &humScale, &master, &bpmBox, &viewport, &laneEditor, &timeline, &pianoModeBtn,
+             &grooveSlot, &grooveAmt, &grooveBpmBox })
         addAndMakeVisible (c);
     addChildComponent (help);
 
@@ -1495,6 +1612,17 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     variation.setTooltip ("Ghost notes, velocity spread, steps with less than 100% probability, micro timing");
     irregular.setTooltip ("Chance that a lane gets an odd length, odd rate and Euclidean placement");
     mutateAmt.setTooltip ("How much Mutate changes the current groove");
+
+    grooveSlot.setTooltip ("Drop a drum loop or a track you love here (or click to choose one). Groovebox finds its tempo and, "
+                           "for every 16th, how early or late and how loud its lows, mids and highs play, then moves your lanes towards it. "
+                           "Pick the genre \"From reference groove\" to also generate patterns from where it hits. Right-click to clear.");
+    grooveSlot.forcedBpm = [this] { return (double) grooveBpmBox.getValue(); };
+    grooveSlot.onStatus = [this] (const juce::String& t) { status.setText (t, juce::dontSendNotification); };
+    setupBar (grooveAmt, "Groove", proc.grooveAmount, [this] (float v) { proc.setGrooveAmount (v); });
+    grooveAmt.setTooltip ("How far the lanes move towards the reference's timing and accents (0 = off)");
+    grooveBpmBox.format = [] (int v) { return v <= 0 ? juce::String ("Ref auto") : "Ref " + juce::String (v); };
+    grooveBpmBox.setTooltip ("Tempo of the reference. Auto detects it; if it picks half or double, drag to set it (then it's analyzed again)");
+    grooveBpmBox.onChange = [this] (int) { grooveReanalyzeIn = 12; };
 
     for (auto* s : { &swingScale, &humScale })
     {
@@ -1870,7 +1998,17 @@ void GrooveboxEditor::syncRows()
     variation.setValue (proc.gen.variation, juce::dontSendNotification);
     irregular.setValue (proc.gen.irregular, juce::dontSendNotification);
     mutateAmt.setValue (proc.mutateAmount, juce::dontSendNotification);
-    for (auto* s : { &density, &variation, &irregular, &mutateAmt })
+    grooveAmt.setValue (proc.grooveAmount, juce::dontSendNotification);
+    grooveBpmBox.setValue (juce::roundToInt (proc.grooveForcedBpm), false);
+    grooveSlot.repaint();
+    if (proc.grooveMessage.isNotEmpty())
+    {
+        status.setText (proc.grooveMessage, juce::dontSendNotification);
+        proc.grooveMessage.clear();
+        bpmBox.setValue (juce::roundToInt (proc.previewBpm.load()), false);
+        swingScale.updateText();
+    }
+    for (auto* s : { &density, &variation, &irregular, &mutateAmt, &grooveAmt })
         s->updateText();
 
     timeline.repaint();
@@ -1922,6 +2060,17 @@ void GrooveboxEditor::timerCallback()
     {
         timeline.lastBar = bar;
         timeline.repaint();
+    }
+
+    if (grooveReanalyzeIn > 0 && --grooveReanalyzeIn == 0)
+    {
+        grooveReanalyzeIn = -1;
+        if (proc.grooveFile.existsAsFile())
+        {
+            proc.loadGroove (proc.grooveFile, (double) grooveBpmBox.getValue());
+            status.setText ("Listening to " + proc.grooveFile.getFileName() + " again...", juce::dontSendNotification);
+        }
+        grooveSlot.repaint();
     }
 
     ++tickCount;
@@ -2016,6 +2165,9 @@ void GrooveboxEditor::resized()
     pageLabel.setBounds (row3.removeFromLeft (140)); row3.removeFromLeft (2);
     pageNext.setBounds (row3.removeFromLeft (24)); row3.removeFromLeft (4);
     followBtn.setBounds (row3.removeFromLeft (60)); row3.removeFromLeft (12);
+    grooveBpmBox.setBounds (row3.removeFromRight (78)); row3.removeFromRight (4);
+    grooveAmt.setBounds (row3.removeFromRight (120)); row3.removeFromRight (4);
+    grooveSlot.setBounds (row3.removeFromRight (330)); row3.removeFromRight (12);
     timeline.setBounds (row3);
 
     r.removeFromTop (18); // column captions

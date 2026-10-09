@@ -30,9 +30,20 @@ Click a lane and the bottom panel shows its sequence large, with a row for each 
 
 Turn on **Song**, pick a length (32 to 128 bars) and press **Make song**. Groovebox arranges intro, build, main, break and outro and decides which lanes play in each section (the kick drops out for the last bar of a build). It follows FL's song position, lanes sitting out the current section are dimmed, and **To piano roll / Save MIDI** export the whole arrangement.
 
+## Groove from a reference
+
+Drop a drum loop, or a whole track you love, on the **Groove** box (above the lanes, or click it to pick a file). Groovebox finds its tempo and bar and measures, for every 16th, how early or late and how loud its lows (kick, bass), mids (snare, clap, perc) and highs (hats, shakers, ride) play. The mini grid shows the result (red lows, orange mids, blue highs; off-centre means early or late).
+
+- Every lane moves towards that feel, following its own band. **Groove** sets how far (0 = off).
+- Global swing goes to 0 when a groove loads, since the reference brings its own.
+- Genre **From reference groove** + **Generate** writes patterns from where the reference hits.
+- Tempo is detected; if it picks half or double, drag the **Ref** box to the real tempo and it listens again.
+- Loops that start on the downbeat give the cleanest result. Right-click the Groove box to analyze again or clear.
+- The feel carries into **To piano roll** and **Save MIDI**, and is saved with setups and FL projects.
+
 ## Genres and tempo
 
-House, Deep House, Tech House, Minimal, Techno, Dub Techno, Breaks, UK Garage, IDM, Ambient, Drum & Bass, Jungle, Dubstep / Halftime, Trap (with hat rolls), Hip-hop / Boom bap, Downtempo, plus **Hybrid** and **Free**. Picking a genre sets the **BPM** box to its typical tempo; that tempo drives Groovebox's own **Play** button. When FL plays, FL's tempo is used, so set FL to match.
+House, Deep House, Tech House, Minimal, Techno, Dub Techno, Breaks, UK Garage, IDM, Ambient, Drum & Bass, Jungle, Dubstep / Halftime, Trap (with hat rolls), Hip-hop / Boom bap, Downtempo, plus **Hybrid**, **Free** and **From reference groove**. Picking a genre sets the **BPM** box to its typical tempo; that tempo drives Groovebox's own **Play** button. When FL plays, FL's tempo is used, so set FL to match.
 
 ## Into FL's piano roll
 
@@ -104,6 +115,7 @@ Change a lane's routing in the lane editor (**Output**: own output, main output,
 | Generate / Mutate + amount | New groove, or evolve the current one (pattern-locked lanes are kept) |
 | Density / Variation / Irregular | How busy; ghosts, velocity spread, probability and micro timing; odd lengths, odd rates and Euclidean placement |
 | Swing x / Humanize x | Scale every lane's swing and humanize (automatable) |
+| Groove / amount / Ref | Reference loop or track to take the feel from; how much; its tempo (auto) |
 | Loop / Song / Make song | Bars Generate writes; song mode on/off; arrange a full track |
 | BPM | Tempo for Groovebox's own Play button (follows the genre) |
 | Bars / To piano roll / Piano roll mode / Save MIDI | Drag the groove (or song) into Groovebox's piano roll; switch between piano roll and Groovebox's own sequencer; save a .mid file |
