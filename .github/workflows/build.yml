@@ -1,0 +1,31 @@
+name: Build Groovebox
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel --target Groovebox_VST3 Groovebox_Standalone
+
+      - name: Collect files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item -Recurse build/Groovebox_artefacts/Release/VST3/Groovebox.vst3 out/
+          Copy-Item build/Groovebox_artefacts/Release/Standalone/Groovebox.exe out/
+          Copy-Item INSTALL.txt out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Groovebox-Windows
+          path: out

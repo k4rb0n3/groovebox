@@ -1,0 +1,18 @@
+Groovebox: installing in FL Studio (Windows)
+=============================================
+
+1. Copy the whole "Groovebox.vst3" folder to:
+       C:\Program Files\Common Files\VST3\
+   (Windows will ask for admin permission. That's normal.)
+
+2. In FL Studio: Options > Manage plugins > Find installed plugins.
+   Tick the star next to Groovebox so it shows up in your favourites.
+
+3. Add it like any instrument: click "+" in the Channel Rack > Groovebox.
+
+4. Press Play in FL. Groovebox follows FL's tempo and transport.
+   Or press "Play" inside the plugin to preview without the transport.
+
+Groovebox.exe is a standalone version for quick sample digging outside FL.
+Windows may warn that it's from an unknown publisher (it isn't code signed).
+Click "More info" > "Run anyway" if you want to use it.
