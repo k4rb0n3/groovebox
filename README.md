@@ -28,11 +28,36 @@ Click a lane and the bottom panel shows its sequence large, with a row for each 
 
 ## Song mode
 
-Turn on **Song**, pick a length (32 to 128 bars) and press **Make song**. Groovebox arranges intro, build, main, break and outro and decides which lanes play in each section (the kick drops out for the last bar of a build). It follows FL's song position, lanes sitting out the current section are dimmed, and **Save MIDI / Drag MIDI** export the whole arrangement.
+Turn on **Song**, pick a length (32 to 128 bars) and press **Make song**. Groovebox arranges intro, build, main, break and outro and decides which lanes play in each section (the kick drops out for the last bar of a build). It follows FL's song position, lanes sitting out the current section are dimmed, and **To piano roll / Save MIDI** export the whole arrangement.
 
 ## Genres and tempo
 
 House, Deep House, Tech House, Minimal, Techno, Dub Techno, Breaks, UK Garage, IDM, Ambient, Drum & Bass, Jungle, Dubstep / Halftime, Trap (with hat rolls), Hip-hop / Boom bap, Downtempo, plus **Hybrid** and **Free**. Picking a genre sets the **BPM** box to its typical tempo; that tempo drives Groovebox's own **Play** button. When FL plays, FL's tempo is used, so set FL to match.
+
+## Into FL's piano roll
+
+1. Open Groovebox's piano roll: right-click Groovebox in the Channel Rack > **Piano roll**.
+2. Set how many bars to export (box next to **To piano roll**; Song mode exports the whole song).
+3. Drag **To piano roll** into that piano roll window.
+
+Groovebox switches to **Piano roll mode**: its own sequencer stops and it plays the notes in the piano roll (C3 = lane 1, C#3 = lane 2..., shown on each lane). Samples, filters, outputs and automation stay; each note picks up the pitch, pan, cutoff and sample start of the step it sits on; velocity is in the notes and ratchets become real notes. Notes you add or move to an empty step play the lane's normal sound. Probability is decided at export. Click **Piano roll mode** to switch back to Groovebox's own sequencer.
+
+## Shortcuts
+
+Click anywhere in Groovebox first. **Space stays FL's play/stop.**
+
+| Key | Does |
+|---|---|
+| Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) | Undo / redo (steps, generate, mutate, samples, lane settings, lanes, song) |
+| Ctrl+S | Save setup |
+| G / Shift+G | Generate all / selected lane |
+| M / Shift+M | Mutate all / selected lane |
+| Up / Down | Select lane |
+| Left / Right | Previous / next sample in the selected lane |
+| A | Audition the selected lane |
+| R / Shift+R | Random good-fit sample in the selected lane / shuffle all |
+| P | Groovebox's own Play |
+| H or F1 / Esc | Help / close help |
 
 ## Sample fit
 
@@ -81,7 +106,7 @@ Change a lane's routing in the lane editor (**Output**: own output, main output,
 | Swing x / Humanize x | Scale every lane's swing and humanize (automatable) |
 | Loop / Song / Make song | Bars Generate writes; song mode on/off; arrange a full track |
 | BPM | Tempo for Groovebox's own Play button (follows the genre) |
-| Bars / Drag MIDI / Save MIDI | Export the groove as MIDI (saved to Documents\Groovebox\MIDI) |
+| Bars / To piano roll / Piano roll mode / Save MIDI | Drag the groove (or song) into Groovebox's piano roll; switch between piano roll and Groovebox's own sequencer; save a .mid file |
 | Play / Sequencer | Preview without FL's transport / turn the sequencer off to play Groovebox from MIDI only (C3 = lane 1, C#3 = lane 2...) |
 
 **Each lane**

@@ -162,6 +162,7 @@ private:
     ViewState& view;
     int lane = 0;
     bool resting = false; // song mode: this lane sits out the current section
+    bool pianoRoll = false;
 
     juce::TextButton muteBtn { "M" }, soloBtn { "S" }, prevBtn { "<" }, nextBtn { ">" },
                      randBtn { "?" }, folderBtn { "..." }, genBtn { "Gen" }, mutBtn { "Mut" }, removeBtn { "x" };
@@ -238,7 +239,8 @@ private:
 class MidiDragButton : public juce::TextButton
 {
 public:
-    MidiDragButton (GrooveboxProcessor& p) : juce::TextButton ("Drag MIDI"), proc (p) {}
+    MidiDragButton (GrooveboxProcessor& p) : juce::TextButton ("To piano roll"), proc (p) {}
+    std::function<void()> onDragStart;
     void mouseDrag (const juce::MouseEvent& e) override;
     void mouseUp (const juce::MouseEvent& e) override { dragging = false; juce::TextButton::mouseUp (e); }
 
@@ -258,6 +260,8 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    bool keyPressed (const juce::KeyPress&) override;
+    void mouseDown (const juce::MouseEvent&) override;
 
 private:
     GrooveboxProcessor& proc;
@@ -269,7 +273,7 @@ private:
                      fitFilterBtn { "Fit filter" }, generateBtn { "Generate" }, mutateBtn { "Mutate" }, previewBtn { "Play" },
                      seqBtn { "Sequencer" }, saveMidiBtn { "Save MIDI" }, addLaneBtn { "+ Add lane" },
                      songBtn { "Song" }, makeSongBtn { "Make song" }, pagePrev { "<" }, pageNext { ">" }, followBtn { "Follow" },
-                     editorBtn { "Lane editor" };
+                     editorBtn { "Lane editor" }, pianoModeBtn { "Piano roll mode" };
     cg::MidiDragButton dragMidiBtn;
     juce::ComboBox genreBox, barsBox, loopBox, songLenBox;
     juce::Slider density, variation, irregular, mutateAmt, swingScale, humScale, master;
@@ -299,6 +303,9 @@ private:
     void updatePageLabel();
     void repaintGrids();
     void showSetupsMenu();
+    void saveSetupAs();
+    void doUndo (bool redo);
+    static void keepFocusOnEditor (juce::Component&);
     void setupBar (juce::Slider&, const juce::String& name, double def, std::function<void (float)> setter);
     void timerCallback() override;
 

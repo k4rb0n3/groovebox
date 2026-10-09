@@ -85,6 +85,10 @@ public:
 
     std::atomic<double> previewBpm { 124.0 }; // tempo for the Play button when FL isn't playing
 
+    // Piano roll mode: the internal sequencer stops and Groovebox plays the notes FL's piano roll sends
+    // (C3 = lane 1 ...). Each note picks up the step settings (pitch, pan, cutoff, start) of the step it sits on.
+    std::atomic<bool> pianoRollMode { false };
+
     // Automatable per-lane parameters.
     static juce::String paramId (int lane, const char* what) { return "l" + juce::String (lane + 1) + "_" + what; }
     static float cutoffHz (float norm) { return 20.0f * std::pow (1000.0f, juce::jlimit (0.0f, 1.0f, norm)); }
@@ -119,7 +123,45 @@ public:
 
     juce::AudioFormatManager formats;
 
+    //== Undo / redo (message thread) ==================================================
+    // checkpoint() is called regularly by the editor: when anything changed since the last
+    // checkpoint (and no mouse button is held), the previous state goes on the undo stack.
+    void checkpoint();
+    bool undo();
+    bool redo();
+    bool canUndo() const { return ! undoStack.empty(); }
+    bool canRedo() const { return ! redoStack.empty(); }
+
 private:
+    struct LaneSnap
+    {
+        cg::Role role = cg::Role::Other;
+        juce::String name;
+        int length = 16, rate = cg::kRate16, choke = 0, out = -1;
+        std::vector<cg::Step> steps;
+        float decay = 1, attack = 0, reso = 0.2f, swing = 0, humanize = 0.15f;
+        float level = -6, pan = 0, pitch = 0, cutoff = 1;
+        cg::FilterType filter = cg::FilterType::Off;
+        bool reverse = false, mute = false, solo = false, lockSample = false, lockPattern = false;
+        juce::File folder, file;
+        bool operator== (const LaneSnap&) const;
+    };
+    struct Snapshot
+    {
+        int numLanes = 0;
+        std::vector<LaneSnap> lanes;
+        bool songMode = false;
+        int songBars = 64;
+        std::vector<Section> sections;
+        std::array<juce::uint32, 512> mask {};
+        bool operator== (const Snapshot&) const;
+    };
+    Snapshot takeSnapshot() const;
+    void restoreSnapshot (const Snapshot&);
+    std::vector<Snapshot> undoStack, redoStack;
+    Snapshot current;
+    bool hasCurrent = false;
+
     struct Voice
     {
         bool active = false;

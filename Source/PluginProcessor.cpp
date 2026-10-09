@@ -282,7 +282,8 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
     const bool preview = previewPlaying.load();
     const bool seqOn = apvts.getRawParameterValue ("seq")->load() > 0.5f;
-    const bool running = seqOn && (hostPlaying || preview);
+    const bool pianoRoll = pianoRollMode.load();
+    const bool running = seqOn && ! pianoRoll && (hostPlaying || preview);
 
     if (! hostPlaying)
     {
@@ -323,15 +324,32 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             }
         };
 
+        // Notes from FL (piano roll mode): use the step settings of the step each note sits on.
+        auto stepAtTime = [&] (int li, int offset) -> Step
+        {
+            const auto& lane = lanes[(size_t) li];
+            if (! hostPlaying) return defaultStep;
+            const double t = ppq + (double) offset * beatsPerSample;
+            const double sb = lane.stepBeats();
+            const auto k = (juce::int64) std::floor (t / sb + 0.5);
+            if (k < 0) return defaultStep;
+            Step st = lane.steps[(size_t) (k % juce::jlimit (1, kMaxSteps, lane.length))];
+            if (! st.on) return defaultStep;
+            st.ratchet = 1; // ratchets arrive as their own notes
+            return st;
+        };
+
         for (const auto meta : midi)
         {
             const auto m = meta.getMessage();
             if (m.isNoteOn())
             {
                 const int li = m.getNoteNumber() - kBaseNote;
-                if (li >= 0 && li < nl)
-                    fire (li, m.getFloatVelocity(), juce::jlimit (0, n - 1, meta.samplePosition), defaultStep,
-                          lanes[(size_t) li].stepBeats());
+                if (li >= 0 && li < nl && ! lanes[(size_t) li].mute)
+                {
+                    const int off = juce::jlimit (0, n - 1, meta.samplePosition);
+                    fire (li, m.getFloatVelocity(), off, stepAtTime (li, off), lanes[(size_t) li].stepBeats());
+                }
             }
         }
 
@@ -362,9 +380,9 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
                 continue;
 
             collectEvents (lane, li, passSeed, ppq, ppqEnd, bpm, swingScale, humScale,
-                           [&] (double t, float v, const Step& st)
+                           [&] (double t, float v, const Step& st, double grid)
                            {
-                               if (song && ! laneActiveAtBar (li, (int) std::floor (t / 4.0)))
+                               if (song && ! laneActiveAtBar (li, (int) std::floor (grid / 4.0 + 1.0e-9)))
                                    return; // this lane rests in this part of the song
                                const int off = juce::jlimit (0, n - 1, (int) ((t - ppq) / beatsPerSample));
                                fire (li, v, off, st, sb);
@@ -1059,17 +1077,17 @@ juce::File GrooveboxProcessor::exportMidi()
             if (song)
             {
                 // A song is not a loop: export it as it plays.
-                collectEvents (lane, li, seed, 0.0, total, lastBpm.load(), swingScale, humScale,
-                               [&] (double t, float v, const Step&)
+                collectEvents (lane, li, seed, -1.0, total + 1.0, lastBpm.load(), swingScale, humScale,
+                               [&] (double t, float v, const Step&, double grid)
                                {
-                                   if (laneActiveAtBar (li, (int) std::floor (t / 4.0)))
-                                       events.push_back ({ t, v, kBaseNote + li });
+                                   if (laneActiveAtBar (li, (int) std::floor (grid / 4.0 + 1.0e-9)))
+                                       events.push_back ({ juce::jlimit (0.0, total - 1.0 / 960.0, t), v, kBaseNote + li });
                                });
                 continue;
             }
             const auto clipSteps = (juce::int64) std::ceil (total / lane.stepBeats() - 1.0e-9);
             collectEvents (lane, li, seed, 0.0, total, lastBpm.load(), swingScale, humScale,
-                           [&] (double t, float v, const Step&)
+                           [&] (double t, float v, const Step&, double)
                            {
                                t = std::fmod (t, total);
                                if (t < 0.0) t += total;
@@ -1172,6 +1190,7 @@ std::unique_ptr<juce::XmlElement> GrooveboxProcessor::createStateXml()
     xml.setAttribute ("bars", gen.bars);
     xml.setAttribute ("previewBpm", previewBpm.load());
     xml.setAttribute ("songMode", songMode.load());
+    xml.setAttribute ("pianoRollMode", pianoRollMode.load());
     xml.setAttribute ("songBars", songBars);
     {
         juce::String sec, masks;
@@ -1248,6 +1267,7 @@ void GrooveboxProcessor::applyStateXml (const juce::XmlElement& xmlRef)
     gen.bars      = juce::jlimit (1, 64, xml->getIntAttribute ("bars", 1));
     previewBpm    = juce::jlimit (40.0, 300.0, xml->getDoubleAttribute ("previewBpm", genreBpm (gen.genre)));
     songMode      = xml->getBoolAttribute ("songMode", false);
+    pianoRollMode = xml->getBoolAttribute ("pianoRollMode", false);
     songSections.clear();
     {
         juce::StringArray items;
@@ -1348,6 +1368,175 @@ void GrooveboxProcessor::applyStateXml (const juce::XmlElement& xmlRef)
     }
 
     ++modelVersion;
+}
+
+//==============================================================================
+bool GrooveboxProcessor::LaneSnap::operator== (const LaneSnap& o) const
+{
+    if (role != o.role || name != o.name || length != o.length || rate != o.rate || choke != o.choke || out != o.out
+        || decay != o.decay || attack != o.attack || reso != o.reso || swing != o.swing || humanize != o.humanize
+        || level != o.level || pan != o.pan || pitch != o.pitch || cutoff != o.cutoff || filter != o.filter
+        || reverse != o.reverse || mute != o.mute || solo != o.solo || lockSample != o.lockSample
+        || lockPattern != o.lockPattern || folder != o.folder || file != o.file || steps.size() != o.steps.size())
+        return false;
+    for (size_t i = 0; i < steps.size(); ++i)
+    {
+        const auto& a = steps[i];
+        const auto& b = o.steps[i];
+        if (a.on != b.on || a.vel != b.vel || a.prob != b.prob || a.nudge != b.nudge || a.ratchet != b.ratchet
+            || a.pitch != b.pitch || a.pan != b.pan || a.cutoff != b.cutoff || a.start != b.start)
+            return false;
+    }
+    return true;
+}
+
+bool GrooveboxProcessor::Snapshot::operator== (const Snapshot& o) const
+{
+    if (numLanes != o.numLanes || songMode != o.songMode || songBars != o.songBars || lanes != o.lanes
+        || sections.size() != o.sections.size() || mask != o.mask)
+        return false;
+    for (size_t i = 0; i < sections.size(); ++i)
+        if (sections[i].startBar != o.sections[i].startBar || sections[i].bars != o.sections[i].bars || sections[i].type != o.sections[i].type)
+            return false;
+    return true;
+}
+
+GrooveboxProcessor::Snapshot GrooveboxProcessor::takeSnapshot() const
+{
+    Snapshot sn;
+    sn.numLanes = numLanes.load();
+    sn.songMode = songMode.load();
+    sn.songBars = songBars;
+    sn.sections = songSections;
+    sn.mask = songMask;
+    for (int li = 0; li < sn.numLanes; ++li)
+    {
+        const auto& l = lanes[(size_t) li];
+        LaneSnap ls;
+        ls.role = l.role; ls.name = l.name; ls.length = l.length; ls.rate = l.rate; ls.choke = l.choke; ls.out = l.out;
+        ls.steps.assign (l.steps.begin(), l.steps.begin() + juce::jlimit (1, kMaxSteps, l.length));
+        ls.decay = l.decay; ls.attack = l.attack; ls.reso = l.reso; ls.swing = l.swing; ls.humanize = l.humanize;
+        ls.level = pLevel[(size_t) li]->load(); ls.pan = pPan[(size_t) li]->load();
+        ls.pitch = pPitch[(size_t) li]->load(); ls.cutoff = pCutoff[(size_t) li]->load();
+        ls.filter = l.filter; ls.reverse = l.reverse; ls.mute = l.mute; ls.solo = l.solo;
+        ls.lockSample = l.lockSample; ls.lockPattern = l.lockPattern;
+        ls.folder = l.folder;
+        ls.file = l.sample != nullptr ? l.sample->file : l.pendingFile;
+        sn.lanes.push_back (std::move (ls));
+    }
+    return sn;
+}
+
+void GrooveboxProcessor::restoreSnapshot (const Snapshot& sn)
+{
+    const int nl = juce::jlimit (1, kMaxLanes, sn.numLanes);
+    std::vector<int> loadIndex ((size_t) nl, -1);
+    std::vector<bool> rescan ((size_t) nl, false);
+    std::vector<SamplePtr> dropped;
+
+    {
+        const juce::SpinLock::ScopedLockType sl (lock);
+        for (int li = 0; li < nl; ++li)
+        {
+            auto& l = lanes[(size_t) li];
+            const auto& ls = sn.lanes[(size_t) li];
+            const bool newSlot = li >= numLanes.load();
+            if (newSlot) { l.files.clearQuick(); if (l.sample) dropped.push_back (l.sample); l.sample = nullptr; l.fileIndex = -1; }
+
+            l.role = ls.role; l.name = ls.name; l.length = ls.length; l.rate = ls.rate; l.choke = ls.choke; l.out = ls.out;
+            for (auto& st : l.steps) st = Step {};
+            std::copy (ls.steps.begin(), ls.steps.end(), l.steps.begin());
+            l.decay = ls.decay; l.attack = ls.attack; l.reso = ls.reso; l.swing = ls.swing; l.humanize = ls.humanize;
+            l.filter = ls.filter; l.reverse = ls.reverse; l.mute = ls.mute; l.solo = ls.solo;
+            l.lockSample = ls.lockSample; l.lockPattern = ls.lockPattern;
+
+            const juce::File currentFile = l.sample != nullptr ? l.sample->file : l.pendingFile;
+            if (ls.folder != l.folder || newSlot)
+                rescan[(size_t) li] = ls.folder != juce::File();
+            else if (ls.file != currentFile)
+                loadIndex[(size_t) li] = l.files.indexOf (ls.file);
+        }
+        for (int li = nl; li < kMaxLanes; ++li)
+            if (li < numLanes.load() && lanes[(size_t) li].sample != nullptr) // trailing lanes go away
+            {
+                dropped.push_back (lanes[(size_t) li].sample);
+                lanes[(size_t) li].sample = nullptr;
+            }
+        numLanes = nl;
+        songMode = sn.songMode;
+        songBars = sn.songBars;
+        songMask = sn.mask;
+    }
+    songSections = sn.sections;
+    for (auto& d : dropped) retired.push_back (std::move (d)); // freed later on the message thread
+
+    for (int li = 0; li < nl; ++li)
+    {
+        const auto& ls = sn.lanes[(size_t) li];
+        auto setParam = [this, li] (const char* what, float v)
+        {
+            if (auto* p = dynamic_cast<juce::RangedAudioParameter*> (apvts.getParameter (paramId (li, what))))
+                if (std::abs (p->convertFrom0to1 (p->getValue()) - v) > 1.0e-5f)
+                    p->setValueNotifyingHost (p->convertTo0to1 (v));
+        };
+        setParam ("level", ls.level); setParam ("pan", ls.pan); setParam ("pitch", ls.pitch); setParam ("cutoff", ls.cutoff);
+
+        if (rescan[(size_t) li])
+            setLaneFolder (li, ls.folder, false, ls.file);
+        else if (loadIndex[(size_t) li] >= 0)
+            loadSampleIndex (li, loadIndex[(size_t) li]);
+    }
+
+    current = takeSnapshot();
+    current.lanes.resize ((size_t) nl);
+    for (int li = 0; li < nl; ++li) // the target state, even while a folder is still being rescanned
+        current.lanes[(size_t) li] = sn.lanes[(size_t) li];
+    hasCurrent = true;
+    ++modelVersion;
+}
+
+void GrooveboxProcessor::checkpoint()
+{
+    if (juce::ModifierKeys::currentModifiers.isAnyMouseButtonDown())
+        return; // one drag = one undo step
+
+    auto now = takeSnapshot();
+    if (! hasCurrent)
+    {
+        current = std::move (now);
+        hasCurrent = true;
+        return;
+    }
+    if (now == current)
+        return;
+
+    undoStack.push_back (std::move (current));
+    if (undoStack.size() > 100)
+        undoStack.erase (undoStack.begin());
+    redoStack.clear();
+    current = std::move (now);
+}
+
+bool GrooveboxProcessor::undo()
+{
+    checkpoint(); // capture anything not yet recorded
+    if (undoStack.empty()) return false;
+    redoStack.push_back (current);
+    auto target = std::move (undoStack.back());
+    undoStack.pop_back();
+    restoreSnapshot (target);
+    return true;
+}
+
+bool GrooveboxProcessor::redo()
+{
+    checkpoint();
+    if (redoStack.empty()) return false;
+    undoStack.push_back (current);
+    auto target = std::move (redoStack.back());
+    redoStack.pop_back();
+    restoreSnapshot (target);
+    return true;
 }
 
 //==============================================================================

@@ -137,7 +137,8 @@ inline float hash01 (juce::uint32 seed, int lane, juce::int64 k, int salt)
     return (float) ((x >> 40) & 0xFFFFFF) / (float) 0x1000000;
 }
 
-// Calls fn(ppqTime, velocity, step) for every hit of this lane in [from, to).
+// Calls fn(ppqTime, velocity, step, gridTime) for every hit. gridTime is where the step sits on
+// the grid before swing, nudge and humanize (used to decide which song section a hit belongs to). of this lane in [from, to).
 template <typename Fn>
 void collectEvents (const Lane& lane, int laneIndex, juce::uint32 seed, double from, double to,
                     double bpm, float swingScale, float humanizeScale, Fn&& fn,
@@ -185,7 +186,7 @@ void collectEvents (const Lane& lane, int laneIndex, juce::uint32 seed, double f
             const float  vr = r == 0 ? vel : vel * (0.8f - 0.08f * (float) r);
 
             if (clip || (tr >= from && tr < to))
-                fn (tr, vr, st);
+                fn (tr, vr, st, (double) k * sb);
         }
     }
 }
