@@ -609,6 +609,87 @@ int main (int argc, char** argv)
         CHECK (s3.groove.valid && std::abs (s3.groove.offset[2][1] - p.groove.offset[2][1]) < 0.001f
                && std::abs (s3.grooveAmount - p.grooveAmount) < 0.001f, "groove restored from saved state");
         p.gen.genre = cg::House;
+
+        // Copy the groove into the lanes.
+        p.checkpoint();
+        p.lanes[0].lockPattern = false;
+        p.applyGrooveToLanes (true);
+        CHECK (p.lanes[0].steps[0].on && p.lanes[0].steps[4].on && p.lanes[0].steps[8].on && ! p.lanes[0].steps[2].on
+               && p.grooveAmount == 0.0f, "Copy groove to lanes writes the reference's kicks (" + laneString (p.lanes[0]) + ")");
+        int hatLane = -1;
+        for (int i = 0; i < p.numLanes; ++i) if (p.lanes[(size_t) i].role == cg::Role::ClosedHat) { hatLane = i; break; }
+        CHECK (hatLane >= 0 && p.lanes[(size_t) hatLane].steps[1].on && p.lanes[(size_t) hatLane].steps[1].nudge > 0.2f,
+               "copied hats carry the reference's late offbeats as nudge");
+        CHECK (p.undo(), "Ctrl+Z undoes the copy");
+        p.setGrooveAmount (0.8f);
+    }
+
+    // 21. To FL: a lane as its own channel (baked sample + notes)
+    {
+        int li = -1;
+        for (int i = 0; i < p.numLanes; ++i) if (p.lanes[(size_t) i].sample != nullptr) { li = i; break; }
+        CHECK (li >= 0, "a lane with a sample to send");
+        p.lanes[(size_t) li].filter = cg::FilterType::LowPass;
+        p.lanes[(size_t) li].decay = 0.4f;
+        for (auto& st : p.lanes[(size_t) li].steps) st = cg::Step {};
+        p.lanes[(size_t) li].length = 16;
+        p.lanes[(size_t) li].rate = cg::kRate16;
+        p.lanes[(size_t) li].mute = false;
+        for (int k : { 0, 4, 8, 12 }) p.lanes[(size_t) li].steps[(size_t) k].on = true;
+        p.lanes[(size_t) li].steps[8].pitch = 7.0f;
+        p.lanes[(size_t) li].steps[12].ratchet = 2;
+
+        const auto wav = p.bakeLaneSample (li);
+        std::unique_ptr<juce::AudioFormatReader> rd (p.formats.createReaderFor (wav));
+        CHECK (rd != nullptr && rd->numChannels == 2 && rd->lengthInSamples > 100, "baked sample written: " + wav.getFileName());
+        if (rd != nullptr)
+        {
+            juce::AudioBuffer<float> b (2, (int) rd->lengthInSamples);
+            rd->read (&b, 0, b.getNumSamples(), 0, true, true);
+            const auto decayLen = rd->sampleRate * 0.005 * std::pow (400.0, 0.4) + rd->sampleRate * 0.02;
+            CHECK (b.getMagnitude (0, b.getNumSamples()) > 0.01f && b.getNumSamples() <= decayLen,
+                   "baked sample has the lane's decay (" + juce::String (b.getNumSamples() / rd->sampleRate * 1000.0, 0) + " ms)");
+        }
+        CHECK (p.bakeLaneSample (li) == wav, "same sound gives the same file (no duplicates)");
+        p.lanes[(size_t) li].reverse = true;
+        CHECK (p.bakeLaneSample (li) != wav, "changed sound gives a new file");
+        p.lanes[(size_t) li].reverse = false;
+
+        p.songMode = false;
+        p.gen.bars = 1;
+        for (int i = 0; i < p.numLanes; ++i) { p.lanes[(size_t) i].length = juce::jmin (16, p.lanes[(size_t) i].length); p.lanes[(size_t) i].rate = cg::kRate16; }
+        const auto mid = p.exportLaneMidi (li);
+        juce::MidiFile mf;
+        juce::FileInputStream in (mid);
+        CHECK (in.openedOk() && mf.readFrom (in), "lane notes written: " + mid.getFileName());
+        int ons = 0; bool c5 = false, g5 = false;
+        for (int t = 0; t < mf.getNumTracks(); ++t)
+            for (auto* ev : *mf.getTrack (t))
+                if (ev->message.isNoteOn())
+                {
+                    ++ons;
+                    c5 = c5 || ev->message.getNoteNumber() == 60;
+                    g5 = g5 || ev->message.getNoteNumber() == 67;
+                }
+        CHECK (ons == 5 && c5 && g5, "one note per hit (ratchet = 2 notes) on C5, step pitch moves the note (" + juce::String (ons) + " notes)");
+        const auto all = p.bakeAllLaneSamples();
+        CHECK (all.size() >= 3, "all lanes baked for one drag (" + juce::String (all.size()) + " files)");
+    }
+
+    // 22. Scrubbing the song
+    {
+        p.makeSong (64);
+        p.songMode = true;
+        p.seekTo (32.0 * 4.0);
+        CHECK (p.displayBar() == 32, "dragging on the song strip moves the cursor (bar " + juce::String (p.displayBar() + 1) + ")");
+        head.playing = false;
+        p.previewPlaying = true;
+        render (p, head, 0.05, nullptr);
+        CHECK (p.currentBar.load() == 32, "Groovebox's Play starts from the cursor");
+        p.previewPlaying = false;
+        render (p, head, 0.02, nullptr);
+        head.playing = true;
+        p.songMode = false;
     }
 
     // 8. UI snapshot
@@ -644,6 +725,16 @@ int main (int argc, char** argv)
             hf.deleteFile();
             juce::FileOutputStream hs (hf);
             juce::PNGImageFormat().writeImageToStream (himg, hs);
+        }
+        {
+            cg::GrooveView gv (q);
+            gv.setSize (1380, 290);
+            gv.refresh();
+            auto gimg = gv.createComponentSnapshot (gv.getLocalBounds(), true, 1.0f);
+            auto gf = outDir.getChildFile ("groove.png");
+            gf.deleteFile();
+            juce::FileOutputStream gs (gf);
+            juce::PNGImageFormat().writeImageToStream (gimg, gs);
         }
         ed.reset();
     }

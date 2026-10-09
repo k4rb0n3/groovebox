@@ -28,30 +28,33 @@ Click a lane and the bottom panel shows its sequence large, with a row for each 
 
 ## Song mode
 
-Turn on **Song**, pick a length (32 to 128 bars) and press **Make song**. Groovebox arranges intro, build, main, break and outro and decides which lanes play in each section (the kick drops out for the last bar of a build). It follows FL's song position, lanes sitting out the current section are dimmed, and **To piano roll / Save MIDI** export the whole arrangement.
+Turn on **Song**, pick a length (32 to 128 bars) and press **Make song**. Groovebox arranges intro, build, main, break and outro and decides which lanes play in each section (the kick drops out for the last bar of a build). It follows FL's song position and lanes sitting out the current section are dimmed. **Click or drag on the song strip** to scrub: the marker shows where Groovebox's own Play starts and which lanes play there. Notes sent to FL cover the whole song.
 
 ## Groove from a reference
 
-Drop a drum loop, or a whole track you love, on the **Groove** box (above the lanes, or click it to pick a file). Groovebox finds its tempo and bar and measures, for every 16th, how early or late and how loud its lows (kick, bass), mids (snare, clap, perc) and highs (hats, shakers, ride) play. The mini grid shows the result (red lows, orange mids, blue highs; off-centre means early or late).
+Drop a drum loop, or a whole track you love, on the **Reference groove** box (top right), or click it. Groovebox finds its tempo and bar and measures, for every 16th, how early or late and how loud its lows (kick, bass), mids (snare, clap, perc) and highs (hats, shakers, ride) play.
 
-- Every lane moves towards that feel, following its own band. **Groove** sets how far (0 = off).
-- Global swing goes to 0 when a groove loads, since the reference brings its own.
-- Genre **From reference groove** + **Generate** writes patterns from where the reference hits.
-- Tempo is detected; if it picks half or double, drag the **Ref** box to the real tempo and it listens again.
-- Loops that start on the downbeat give the cleanest result. Right-click the Groove box to analyze again or clear.
-- The feel carries into **To piano roll** and **Save MIDI**, and is saved with setups and FL projects.
+Clicking the box opens the **Groove panel** at the bottom: every 16th of the reference, with how loud (bar height), how often (%) and how early or late (ms). There you can:
+
+- Set **Groove amount**: how far your lanes lean into that feel while they play (0 = off).
+- **Copy groove to lanes**: write the reference's hits, accents and timing into your lanes (kick from the lows, snare and clap from the loud mids, hats from the highs). Pattern-locked lanes are kept.
+- **Copy timing only**: keep your patterns but give them the reference's push and drag (Nudge and Velocity rows).
+- Fix the **Tempo** if it picked half or double (it listens again).
+
+Ctrl+Z undoes a copy. Genre **From reference groove** + **Generate** also writes patterns from where the reference hits. The feel goes along when you send lanes to FL, and it's saved with setups and projects.
 
 ## Genres and tempo
 
 House, Deep House, Tech House, Minimal, Techno, Dub Techno, Breaks, UK Garage, IDM, Ambient, Drum & Bass, Jungle, Dubstep / Halftime, Trap (with hat rolls), Hip-hop / Boom bap, Downtempo, plus **Hybrid**, **Free** and **From reference groove**. Picking a genre sets the **BPM** box to its typical tempo; that tempo drives Groovebox's own **Play** button. When FL plays, FL's tempo is used, so set FL to match.
 
-## Into FL's piano roll
+## Send lanes to FL as their own channels
 
-1. Open Groovebox's piano roll: right-click Groovebox in the Channel Rack > **Piano roll**.
-2. Set how many bars to export (box next to **To piano roll**; Song mode exports the whole song).
-3. Drag **To piano roll** into that piano roll window.
+Click a lane; the lane editor at the bottom has dashed drag buttons:
 
-Groovebox switches to **Piano roll mode**: its own sequencer stops and it plays the notes in the piano roll (C3 = lane 1, C#3 = lane 2..., shown on each lane). Samples, filters, outputs and automation stay; each note picks up the pitch, pan, cutoff and sample start of the step it sits on; velocity is in the notes and ratchets become real notes. Notes you add or move to an empty step play the lane's normal sound. Probability is decided at export. Click **Piano roll mode** to switch back to Groovebox's own sequencer.
+1. Drag **Sample > Channel Rack** onto FL's Channel Rack. FL makes a new channel with the lane's sample, with its pitch, filter, decay, attack, reverse, level and pan baked in.
+2. Open that channel's piano roll and drag **Notes > Piano roll** into it. The pattern lands on C5 (the sample's own pitch) with velocity, step pitch, ratchets, swing and the reference groove. Length = your loop, or the whole song in Song mode.
+
+**All lanes > Channel Rack** makes every channel at once; then drag each lane's notes into its channel. Per-step pan, cutoff and sample start stay in Groovebox (FL channels can't take them per note). Files are kept in `Documents\Groovebox\To FL`. **Setups > Save all lanes as one MIDI file** writes every lane into one .mid (C3 = lane 1...).
 
 ## Shortcuts
 
@@ -95,12 +98,11 @@ Manual edits (scrolling, drawing steps) still work on locked lanes.
 - **A new Groovebox starts from your last session**, and the last session autosaves every few seconds, so a crash never loses your folders and grooves. **Setups > Load last session** brings it back any time.
 - FL projects still restore their own Groovebox state as usual.
 
-## Each lane on its own mixer track
+## Mixer tracks
 
-1. Open Groovebox's plugin wrapper, go to the **Processing** tab, click **Auto map outputs**.
-2. Every lane plays on its own output (Lane 1 also feeds Main), so each lands on its own mixer track.
+**Lanes playing inside Groovebox:** open Groovebox's plugin wrapper (icon at the top left of its window), **Processing** tab, **Auto map outputs**. Lane 1 then lands on the first new mixer track, lane 2 on the next, and so on. In the lane editor, **Mixer track** picks Own, Main, or "Same as lane N" to share a track (the **How?** button repeats these steps).
 
-Change a lane's routing in the lane editor (**Output**: own output, main output, or any output 2 to 32). Without auto-mapped outputs everything plays through the main output.
+**Lanes sent to FL as channels:** set the mixer track on the FL channel itself (the number box on the channel in the Channel Rack).
 
 ## Controls
 
@@ -115,10 +117,9 @@ Change a lane's routing in the lane editor (**Output**: own output, main output,
 | Generate / Mutate + amount | New groove, or evolve the current one (pattern-locked lanes are kept) |
 | Density / Variation / Irregular | How busy; ghosts, velocity spread, probability and micro timing; odd lengths, odd rates and Euclidean placement |
 | Swing x / Humanize x | Scale every lane's swing and humanize (automatable) |
-| Groove / amount / Ref | Reference loop or track to take the feel from; how much; its tempo (auto) |
+| Reference groove | Loop or track to take the feel from; click it for the Groove panel |
 | Loop / Song / Make song | Bars Generate writes; song mode on/off; arrange a full track |
 | BPM | Tempo for Groovebox's own Play button (follows the genre) |
-| Bars / To piano roll / Piano roll mode / Save MIDI | Drag the groove (or song) into Groovebox's piano roll; switch between piano roll and Groovebox's own sequencer; save a .mid file |
 | Play / Sequencer | Preview without FL's transport / turn the sequencer off to play Groovebox from MIDI only (C3 = lane 1, C#3 = lane 2...) |
 
 **Each lane**

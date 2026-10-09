@@ -156,6 +156,120 @@ bool GrooveboxProcessor::isBusesLayoutSupported (const BusesLayout& layouts) con
     return layouts.inputBuses.isEmpty() || layouts.getMainInputChannelSet().isDisabled();
 }
 
+void GrooveboxProcessor::initVoice (Voice& v, int li, float vel, const Step& st, double rate,
+                                    float levelDb, float panK, float pitchSt, float cutoffN) const
+{
+    const auto& lane = lanes[(size_t) li];
+    const int len = lane.sample->buffer.getNumSamples();
+    const double ratio = std::pow (2.0, (double) (pitchSt + st.pitch) / 12.0) * lane.sample->sampleRate / rate;
+    const double startSamples = (double) juce::jlimit (0.0f, 1.0f, st.start) * 0.5 * (double) len;
+
+    v.active = true;
+    v.smp = lane.sample;
+    if (lane.reverse) { v.pos = (double) (len - 2) - startSamples; v.inc = -ratio; }
+    else              { v.pos = startSamples;                      v.inc = ratio; }
+
+    const float velGain = juce::Decibels::decibelsToGain (-30.0f * (1.0f - juce::jlimit (0.0f, 1.0f, vel)));
+    const float g = juce::Decibels::decibelsToGain (levelDb, -60.0f) * velGain;
+    const float pan = juce::jlimit (-1.0f, 1.0f, panK + st.pan);
+    const float angle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+    v.gainL = g * std::cos (angle) * juce::MathConstants<float>::sqrt2;
+    v.gainR = g * std::sin (angle) * juce::MathConstants<float>::sqrt2;
+
+    // Filter: the lane filter, or an automatic low-pass when only per-step cutoff is used.
+    v.ftype = lane.filter;
+    float norm = cutoffN;
+    if (v.ftype == FilterType::Off && st.cutoff < 0.999f) { v.ftype = FilterType::LowPass; norm = 1.0f; }
+    if (v.ftype != FilterType::Off)
+    {
+        const float fc = juce::jlimit (20.0f, (float) (rate * 0.45),
+                                       cutoffHz (norm) * std::pow (2.0f, -(1.0f - juce::jlimit (0.0f, 1.0f, st.cutoff)) * 6.0f));
+        const float gg = std::tan (juce::MathConstants<float>::pi * fc / (float) rate);
+        v.k  = 2.0f - 1.9f * juce::jlimit (0.0f, 1.0f, lane.reso);
+        v.a1 = 1.0f / (1.0f + gg * (gg + v.k));
+        v.a2 = gg * v.a1;
+        v.a3 = gg * v.a2;
+        v.ic1[0] = v.ic1[1] = v.ic2[0] = v.ic2[1] = 0.0f;
+    }
+
+    v.lane = li;
+    v.chokeGroup = lane.choke;
+    const int outIdx = lane.out < 0 ? li : lane.out;
+    v.out = juce::jlimit (0, kNumOuts - 1, outIdx);
+    v.startOffset = 0;
+    v.chokeAt = -1;
+    v.age = 0;
+    v.attackSamples = (int) (rate * 0.2 * (double) (lane.attack * lane.attack));
+    v.decaySamples = lane.decay >= 0.999f ? std::numeric_limits<int>::max()
+                                          : (int) (rate * 0.005 * std::pow (400.0, (double) lane.decay));
+    v.fading = false;
+    v.fadeLen = juce::jmax (1, (int) (rate * 0.012));
+    v.fadeLeft = v.fadeLen;
+
+}
+
+void GrooveboxProcessor::renderVoice (Voice& v, float* oL, float* oR, int from, int to, double rate)
+{
+    const auto& b = v.smp->buffer;
+    const int len = b.getNumSamples();
+    const float* sL = b.getReadPointer (0);
+    const float* sR = b.getReadPointer (1);
+
+    for (int i = from; i < to; ++i)
+    {
+        if (v.chokeAt >= 0 && i >= v.chokeAt && ! v.fading)
+        {
+            v.fading = true;
+            v.fadeLen = juce::jmax (1, (int) (rate * 0.004));
+            v.fadeLeft = v.fadeLen;
+        }
+        if (! v.fading && v.age >= v.decaySamples)
+        {
+            v.fading = true;
+            v.fadeLeft = v.fadeLen;
+        }
+
+        const int ip = (int) std::floor (v.pos);
+        if (ip < 0 || ip + 1 >= len) { v.active = false; break; }
+
+        const float fr = (float) (v.pos - (double) ip);
+        float l = sL[ip] + fr * (sL[ip + 1] - sL[ip]);
+        float r = sR[ip] + fr * (sR[ip + 1] - sR[ip]);
+
+        if (v.ftype != FilterType::Off)
+        {
+            float* io[2] = { &l, &r };
+            for (int c = 0; c < 2; ++c)
+            {
+                const float x = *io[c];
+                const float v3 = x - v.ic2[c];
+                const float v1 = v.a1 * v.ic1[c] + v.a2 * v3;
+                const float v2 = v.ic2[c] + v.a2 * v.ic1[c] + v.a3 * v3;
+                v.ic1[c] = 2.0f * v1 - v.ic1[c];
+                v.ic2[c] = 2.0f * v2 - v.ic2[c];
+                *io[c] = v.ftype == FilterType::LowPass ? v2
+                       : v.ftype == FilterType::BandPass ? v1
+                                                         : x - v.k * v1 - v2;
+            }
+        }
+
+        float e = 1.0f;
+        if (v.attackSamples > 0 && v.age < v.attackSamples)
+            e = (float) v.age / (float) v.attackSamples;
+        if (v.fading)
+        {
+            e *= (float) v.fadeLeft / (float) v.fadeLen;
+            if (--v.fadeLeft <= 0) { v.active = false; break; }
+        }
+
+        oL[i] += l * v.gainL * e;
+        oR[i] += r * v.gainR * e;
+        v.pos += v.inc;
+        ++v.age;
+    }
+
+}
+
 void GrooveboxProcessor::triggerVoice (int li, float vel, int offset, const Step& st)
 {
     const auto& lane = lanes[(size_t) li];
@@ -178,52 +292,9 @@ void GrooveboxProcessor::triggerVoice (int li, float vel, int offset, const Step
             if (v.age > target->age) target = &v;
     }
 
-    auto& v = *target;
-    const int len = lane.sample->buffer.getNumSamples();
-    const double ratio = std::pow (2.0, (double) (pPitch[(size_t) li]->load() + st.pitch) / 12.0) * lane.sample->sampleRate / sr;
-    const double startSamples = (double) juce::jlimit (0.0f, 1.0f, st.start) * 0.5 * (double) len;
-
-    v.active = true;
-    v.smp = lane.sample;
-    if (lane.reverse) { v.pos = (double) (len - 2) - startSamples; v.inc = -ratio; }
-    else              { v.pos = startSamples;                      v.inc = ratio; }
-
-    const float velGain = juce::Decibels::decibelsToGain (-30.0f * (1.0f - juce::jlimit (0.0f, 1.0f, vel)));
-    const float g = juce::Decibels::decibelsToGain (pLevel[(size_t) li]->load(), -60.0f) * velGain;
-    const float pan = juce::jlimit (-1.0f, 1.0f, pPan[(size_t) li]->load() + st.pan);
-    const float angle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
-    v.gainL = g * std::cos (angle) * juce::MathConstants<float>::sqrt2;
-    v.gainR = g * std::sin (angle) * juce::MathConstants<float>::sqrt2;
-
-    // Filter: the lane filter, or an automatic low-pass when only per-step cutoff is used.
-    v.ftype = lane.filter;
-    float norm = pCutoff[(size_t) li]->load();
-    if (v.ftype == FilterType::Off && st.cutoff < 0.999f) { v.ftype = FilterType::LowPass; norm = 1.0f; }
-    if (v.ftype != FilterType::Off)
-    {
-        const float fc = juce::jlimit (20.0f, (float) (sr * 0.45),
-                                       cutoffHz (norm) * std::pow (2.0f, -(1.0f - juce::jlimit (0.0f, 1.0f, st.cutoff)) * 6.0f));
-        const float gg = std::tan (juce::MathConstants<float>::pi * fc / (float) sr);
-        v.k  = 2.0f - 1.9f * juce::jlimit (0.0f, 1.0f, lane.reso);
-        v.a1 = 1.0f / (1.0f + gg * (gg + v.k));
-        v.a2 = gg * v.a1;
-        v.a3 = gg * v.a2;
-        v.ic1[0] = v.ic1[1] = v.ic2[0] = v.ic2[1] = 0.0f;
-    }
-
-    v.lane = li;
-    v.chokeGroup = lane.choke;
-    const int outIdx = lane.out < 0 ? li : lane.out;
-    v.out = juce::jlimit (0, kNumOuts - 1, outIdx);
-    v.startOffset = offset;
-    v.chokeAt = -1;
-    v.age = 0;
-    v.attackSamples = (int) (sr * 0.2 * (double) (lane.attack * lane.attack));
-    v.decaySamples = lane.decay >= 0.999f ? std::numeric_limits<int>::max()
-                                          : (int) (sr * 0.005 * std::pow (400.0, (double) lane.decay));
-    v.fading = false;
-    v.fadeLen = juce::jmax (1, (int) (sr * 0.012));
-    v.fadeLeft = v.fadeLen;
+    initVoice (*target, li, vel, st, sr, pLevel[(size_t) li]->load(), pPan[(size_t) li]->load(),
+               pPitch[(size_t) li]->load(), pCutoff[(size_t) li]->load());
+    target->startOffset = offset;
 
     laneMeter[(size_t) li] = juce::jmax (laneMeter[(size_t) li].load(), vel);
 }
@@ -287,10 +358,12 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const bool pianoRoll = pianoRollMode.load();
     const bool running = seqOn && ! pianoRoll && (hostPlaying || preview);
 
+    hostIsPlaying = hostPlaying;
     if (! hostPlaying)
     {
+        if (seekPending.exchange (false) || ! preview)
+            internalPpq = songMode.load() ? songCursor.load() : 0.0;
         if (preview) { ppq = internalPpq; bpm = juce::jlimit (40.0, 300.0, previewBpm.load()); }
-        else         internalPpq = 0.0;
     }
 
     lastBpm = bpm;
@@ -415,65 +488,7 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (! v.active)
             continue;
 
-        const auto& b = v.smp->buffer;
-        const int len = b.getNumSamples();
-        const float* sL = b.getReadPointer (0);
-        const float* sR = b.getReadPointer (1);
-        float* oL = outL[(size_t) v.out];
-        float* oR = outR[(size_t) v.out];
-
-        for (int i = v.startOffset; i < n; ++i)
-        {
-            if (v.chokeAt >= 0 && i >= v.chokeAt && ! v.fading)
-            {
-                v.fading = true;
-                v.fadeLen = juce::jmax (1, (int) (sr * 0.004));
-                v.fadeLeft = v.fadeLen;
-            }
-            if (! v.fading && v.age >= v.decaySamples)
-            {
-                v.fading = true;
-                v.fadeLeft = v.fadeLen;
-            }
-
-            const int ip = (int) std::floor (v.pos);
-            if (ip < 0 || ip + 1 >= len) { v.active = false; break; }
-
-            const float fr = (float) (v.pos - (double) ip);
-            float l = sL[ip] + fr * (sL[ip + 1] - sL[ip]);
-            float r = sR[ip] + fr * (sR[ip + 1] - sR[ip]);
-
-            if (v.ftype != FilterType::Off)
-            {
-                float* io[2] = { &l, &r };
-                for (int c = 0; c < 2; ++c)
-                {
-                    const float x = *io[c];
-                    const float v3 = x - v.ic2[c];
-                    const float v1 = v.a1 * v.ic1[c] + v.a2 * v3;
-                    const float v2 = v.ic2[c] + v.a2 * v.ic1[c] + v.a3 * v3;
-                    v.ic1[c] = 2.0f * v1 - v.ic1[c];
-                    v.ic2[c] = 2.0f * v2 - v.ic2[c];
-                    *io[c] = v.ftype == FilterType::LowPass ? v2
-                           : v.ftype == FilterType::BandPass ? v1
-                                                             : x - v.k * v1 - v2;
-                }
-            }
-
-            float e = 1.0f;
-            if (v.attackSamples > 0 && v.age < v.attackSamples)
-                e = (float) v.age / (float) v.attackSamples;
-            if (v.fading)
-            {
-                e *= (float) v.fadeLeft / (float) v.fadeLen;
-                if (--v.fadeLeft <= 0) { v.active = false; break; }
-            }
-
-            oL[i] += l * v.gainL * e;
-            oR[i] += r * v.gainR * e;
-            v.pos += v.inc;
-            ++v.age;
-        }
+        renderVoice (v, outL[(size_t) v.out], outR[(size_t) v.out], v.startOffset, n, sr);
 
         v.startOffset = 0;
         v.chokeAt = -1;
@@ -1224,6 +1239,216 @@ juce::File GrooveboxProcessor::exportMidi()
 }
 
 //==============================================================================
+// Sending lanes to FL as normal channels: the sample (with the lane's sound baked in) goes to the
+// Channel Rack, the notes go to that channel's piano roll.
+juce::File GrooveboxProcessor::flExportFolder()
+{
+    auto dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                   .getChildFile ("Groovebox").getChildFile ("To FL");
+    dir.createDirectory();
+    return dir;
+}
+
+int GrooveboxProcessor::exportLengthBars() const
+{
+    if (songMode.load()) return songBars;
+    double beats = 4.0 * gen.bars;
+    for (int li = 0; li < numLanes; ++li)
+        beats = juce::jmax (beats, lanes[(size_t) li].length * lanes[(size_t) li].stepBeats());
+    return juce::jlimit (1, 64, (int) std::ceil (beats / 4.0 - 1.0e-9));
+}
+
+juce::String GrooveboxProcessor::laneExportName (int li) const
+{
+    const auto& l = lanes[(size_t) li];
+    juce::String n = l.name.isNotEmpty() ? l.name : juce::String (roleName (l.role));
+    if (l.sample != nullptr && l.sample->file.getFileNameWithoutExtension() != n)
+        n << " - " << l.sample->file.getFileNameWithoutExtension();
+    return juce::File::createLegalFileName (n).replaceCharacter ('/', '-').substring (0, 60).trim();
+}
+
+juce::File GrooveboxProcessor::bakeLaneSample (int li)
+{
+    if (li < 0 || li >= numLanes) return {};
+
+    SamplePtr smp;
+    Voice v;
+    juce::String name, key;
+    {
+        const juce::SpinLock::ScopedLockType sl (lock);
+        const auto& l = lanes[(size_t) li];
+        if (l.sample == nullptr || l.sample->buffer.getNumSamples() < 4) return {};
+        smp = l.sample;
+        const float lvl = pLevel[(size_t) li]->load(), pan = pPan[(size_t) li]->load();
+        const float pit = pPitch[(size_t) li]->load(), cut = pCutoff[(size_t) li]->load();
+        initVoice (v, li, 1.0f, Step {}, smp->sampleRate, lvl, pan, pit, cut);
+        name = laneExportName (li);
+        key << smp->file.getFullPathName() << lvl << pan << pit << cut << (int) l.filter << l.reso << l.attack << l.decay << (int) l.reverse;
+    }
+
+    // Long enough for the whole sample at its pitch, plus the fade.
+    const int maxLen = (int) juce::jmin ((double) smp->sampleRate * 20.0,
+                                         std::abs ((double) smp->buffer.getNumSamples() / v.inc) + smp->sampleRate * 0.05);
+    juce::AudioBuffer<float> out (2, juce::jmax (16, maxLen));
+    out.clear();
+    renderVoice (v, out.getWritePointer (0), out.getWritePointer (1), 0, out.getNumSamples(), smp->sampleRate);
+    v.smp.reset();
+
+    // Trim the silent tail.
+    int end = out.getNumSamples();
+    while (end > 16 && std::abs (out.getSample (0, end - 1)) < 3.0e-5f && std::abs (out.getSample (1, end - 1)) < 3.0e-5f)
+        --end;
+
+    const auto hash = juce::String::toHexString (key.hashCode64()).getLastCharacters (4);
+    auto file = flExportFolder().getChildFile (name + " (" + hash + ").wav");
+    if (file.existsAsFile()) return file; // same sound already baked
+
+    juce::WavAudioFormat wav;
+    auto tmp = file.getSiblingFile (file.getFileNameWithoutExtension() + ".tmp");
+    {
+        std::unique_ptr<juce::OutputStream> os = std::make_unique<juce::FileOutputStream> (tmp);
+        if (! static_cast<juce::FileOutputStream*> (os.get())->openedOk()) return {};
+        std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), smp->sampleRate, 2, 24, {}, 0));
+        if (w == nullptr) return {};
+        os.release();
+        w->writeFromAudioSampleBuffer (out, 0, end);
+    }
+    tmp.moveFileTo (file);
+    return file;
+}
+
+juce::Array<juce::File> GrooveboxProcessor::bakeAllLaneSamples()
+{
+    juce::Array<juce::File> files;
+    bool anySolo = false;
+    for (int li = 0; li < numLanes; ++li) anySolo = anySolo || lanes[(size_t) li].solo;
+    for (int li = 0; li < numLanes; ++li)
+    {
+        const auto& l = lanes[(size_t) li];
+        if (l.mute || (anySolo && ! l.solo) || l.sample == nullptr) continue;
+        const auto f = bakeLaneSample (li);
+        if (f.existsAsFile()) files.add (f);
+    }
+    return files;
+}
+
+juce::File GrooveboxProcessor::exportLaneMidi (int li)
+{
+    if (li < 0 || li >= numLanes) return {};
+
+    struct Ev { double t; float v; int note; };
+    std::vector<Ev> events;
+    const bool song = songMode.load();
+    const int bars = exportLengthBars();
+    const double total = bars * 4.0;
+    const float swingScale = apvts.getRawParameterValue ("swing")->load();
+    const float humScale   = apvts.getRawParameterValue ("humanize")->load();
+    juce::String name;
+    {
+        const juce::SpinLock::ScopedLockType sl (lock);
+        const auto& lane = lanes[(size_t) li];
+        name = laneExportName (li);
+        // FL's sampler plays a sample at its own pitch on C5 (MIDI 60); step pitch moves the note.
+        auto noteFor = [] (const Step& st) { return juce::jlimit (0, 127, 60 + juce::roundToInt (st.pitch)); };
+        if (song)
+            collectEvents (lane, li, seed, -1.0, total + 1.0, lastBpm.load(), swingScale, humScale,
+                           [&] (double t, float v, const Step& st, double grid)
+                           {
+                               if (laneActiveAtBar (li, (int) std::floor (grid / 4.0 + 1.0e-9)))
+                                   events.push_back ({ juce::jlimit (0.0, total - 1.0 / 960.0, t), v, noteFor (st) });
+                           },
+                           -1, &groove, grooveAmount);
+        else
+            collectEvents (lane, li, seed, 0.0, total, lastBpm.load(), swingScale, humScale,
+                           [&] (double t, float v, const Step& st, double)
+                           {
+                               t = std::fmod (t, total);
+                               if (t < 0.0) t += total;
+                               events.push_back ({ juce::jmin (t, total - 1.0 / 960.0), v, noteFor (st) });
+                           },
+                           (juce::int64) std::ceil (total / lane.stepBeats() - 1.0e-9), &groove, grooveAmount);
+    }
+
+    juce::MidiMessageSequence seq;
+    constexpr double tpq = 960.0;
+    seq.addEvent (juce::MidiMessage::textMetaEvent (3, name), 0.0);
+    seq.addEvent (juce::MidiMessage::tempoMetaEvent ((int) (60000000.0 / lastBpm.load())), 0.0);
+    seq.addEvent (juce::MidiMessage::timeSignatureMetaEvent (4, 4), 0.0);
+    for (const auto& e : events)
+    {
+        seq.addEvent (juce::MidiMessage::noteOn (1, e.note, juce::jlimit (0.01f, 1.0f, e.v)), e.t * tpq);
+        seq.addEvent (juce::MidiMessage::noteOff (1, e.note), (e.t + juce::jlimit (0.01, 0.125, total - e.t)) * tpq);
+    }
+    seq.updateMatchedPairs();
+
+    juce::MidiFile mf;
+    mf.setTicksPerQuarterNote ((int) tpq);
+    mf.addTrack (seq);
+    auto file = flExportFolder().getChildFile (name + " notes " + juce::String (bars) + (bars == 1 ? " bar" : " bars") + ".mid");
+    file.deleteFile();
+    juce::FileOutputStream os (file);
+    if (! os.openedOk()) return {};
+    mf.writeTo (os);
+    os.flush();
+    return file;
+}
+
+//==============================================================================
+void GrooveboxProcessor::applyGrooveToLanes (bool copyPattern)
+{
+    {
+        const juce::SpinLock::ScopedLockType sl (lock);
+        if (! groove.valid) return;
+        for (int li = 0; li < numLanes; ++li)
+        {
+            auto& l = lanes[(size_t) li];
+            if (l.lockPattern) continue;
+            const int band = bandFor (l.role);
+
+            if (copyPattern)
+            {
+                if (l.role == Role::Texture || l.role == Role::FX || l.role == Role::Other || l.role == Role::Cymbal)
+                    continue; // long sounds: keep what they have
+                const auto tpl = referenceTemplate (groove, l.role);
+                l.length = 16;
+                l.rate = kRate16;
+                for (auto& st : l.steps) st = Step {};
+                for (int i = 0; i < 16; ++i)
+                {
+                    const float p = tpl[(size_t) i];
+                    if (p < 0.2f) continue;
+                    auto& st = l.steps[(size_t) i];
+                    st.on = true;
+                    st.prob = p >= 0.85f ? 1.0f : p;
+                    st.vel = groove.has[(size_t) band][(size_t) i] ? 0.35f + 0.65f * groove.accent[(size_t) band][(size_t) i] : 0.6f;
+                    st.nudge = juce::jlimit (-0.5f, 0.5f, grooveOffset (groove, band, i));
+                }
+            }
+            else
+            {
+                // Timing and accents only: every hit that sits on a 16th takes the reference's push or drag.
+                const double sb = l.stepBeats();
+                for (int k = 0; k < l.length; ++k)
+                {
+                    auto& st = l.steps[(size_t) k];
+                    if (! st.on) continue;
+                    const double g16 = (double) k * sb / 0.25;
+                    const double r16 = std::round (g16);
+                    if (std::abs (g16 - r16) > 0.26) continue;
+                    const int slot = (int) (((juce::int64) r16) % 16);
+                    st.nudge = juce::jlimit (-0.5f, 0.5f, (float) (grooveOffset (groove, band, slot) * 0.25 / sb));
+                    if (groove.has[(size_t) band][(size_t) slot])
+                        st.vel = juce::jlimit (0.05f, 1.0f, st.vel * (0.55f + 0.9f * groove.accent[(size_t) band][(size_t) slot]));
+                }
+            }
+            l.swing = 0.0f;
+        }
+        grooveAmount = 0.0f; // the feel now lives in the steps; don't apply it twice
+    }
+    ++modelVersion;
+}
+
+//==============================================================================
 juce::String GrooveboxProcessor::stepsToString (const Lane& lane)
 {
     juce::String s;
@@ -1374,7 +1599,7 @@ void GrooveboxProcessor::applyStateXml (const juce::XmlElement& xmlRef)
     gen.bars      = juce::jlimit (1, 64, xml->getIntAttribute ("bars", 1));
     previewBpm    = juce::jlimit (40.0, 300.0, xml->getDoubleAttribute ("previewBpm", genreBpm (gen.genre)));
     songMode      = xml->getBoolAttribute ("songMode", false);
-    pianoRollMode = xml->getBoolAttribute ("pianoRollMode", false);
+    pianoRollMode = false; // the one-channel piano roll workflow was replaced by per-lane export in 0.6
     songSections.clear();
     {
         juce::StringArray items;

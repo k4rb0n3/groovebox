@@ -77,6 +77,16 @@ public:
     std::vector<Section> songSections;
     std::array<juce::uint32, 512> songMask {}; // bit per lane: does the lane play in this bar
     std::atomic<int> currentBar { -1 };
+    // Song cursor: where Groovebox's own Play starts (drag on the song strip). FL's playback follows FL's position.
+    std::atomic<double> songCursor { 0.0 };
+    std::atomic<bool> seekPending { false }, hostIsPlaying { false };
+    void seekTo (double beats) { songCursor = juce::jmax (0.0, beats); seekPending = true; }
+    int displayBar() const
+    {
+        const int b = currentBar.load();
+        if (b >= 0) return b;
+        return songMode.load() ? (int) std::floor (songCursor.load() / 4.0) : -1;
+    }
     void makeSong (int bars);
     bool laneActiveAtBar (int lane, int bar) const
     {
@@ -133,6 +143,16 @@ public:
     void audition (int lane) { if (lane >= 0 && lane < cg::kMaxLanes) auditionFlag[(size_t) lane] = true; }
 
     juce::File exportMidi();
+
+    // To FL: each lane as a normal FL channel. Drag the baked sample onto the Channel Rack,
+    // then the notes into that channel's piano roll.
+    juce::File bakeLaneSample (int lane);           // WAV with the lane's sound (pitch, filter, decay...) baked in
+    juce::Array<juce::File> bakeAllLaneSamples();
+    juce::File exportLaneMidi (int lane);           // the lane's notes on C5 (FL's sampler root), groove included
+    int exportLengthBars() const;
+    juce::String laneExportName (int lane) const;
+    static juce::File flExportFolder();
+    void applyGrooveToLanes (bool copyPattern);     // write the reference groove into the steps
     static juce::File exportFolder();
 
     juce::AudioFormatManager formats;
@@ -224,6 +244,9 @@ private:
     static std::vector<std::pair<juce::File, juce::Array<juce::File>>> findLibraryFolders (const juce::File& root);
 
     void triggerVoice (int lane, float vel, int offset, const cg::Step& st);        // audio thread, under lock
+    void initVoice (Voice&, int lane, float vel, const cg::Step&, double rate,
+                    float levelDb, float pan, float pitch, float cutoff) const;     // under lock
+    static void renderVoice (Voice&, float* outL, float* outR, int from, int to, double rate);
     void sendLaneMidi (int lane, float vel, int offset, const cg::Step& st, int lengthSamples); // audio thread
     cg::SamplePtr loadSample (const juce::File&);
     void swapSample (int lane, cg::SamplePtr);

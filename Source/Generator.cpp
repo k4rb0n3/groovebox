@@ -125,8 +125,6 @@ float swingFor (Role r, float genreSwing)
 }
 } // namespace
 
-namespace
-{
 // 16-step probability template for a role, read from where the reference plays.
 std::array<float, 16> referenceTemplate (const Groove& gr, Role role)
 {
@@ -168,7 +166,6 @@ std::array<float, 16> referenceTemplate (const Groove& gr, Role role)
     }
     return t;
 }
-} // namespace
 
 double genreBpm (int g)
 {

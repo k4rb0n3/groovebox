@@ -162,6 +162,16 @@ inline float hash01 (juce::uint32 seed, int lane, juce::int64 k, int salt)
     return (float) ((x >> 40) & 0xFFFFFF) / (float) 0x1000000;
 }
 
+// Where the reference plays this 16th for a band, in 16ths (slots the band never played borrow the other bands' timing).
+inline float grooveOffset (const Groove& g, int band, int slot)
+{
+    if (g.has[(size_t) band][(size_t) slot]) return g.offset[(size_t) band][(size_t) slot];
+    float sum = 0.0f; int cnt = 0;
+    for (int b = 0; b < 3; ++b)
+        if (g.has[(size_t) b][(size_t) slot]) { sum += g.offset[(size_t) b][(size_t) slot]; ++cnt; }
+    return cnt > 0 ? sum / (float) cnt : 0.0f;
+}
+
 // Calls fn(ppqTime, velocity, step, gridTime) for every hit. gridTime is where the step sits on
 // the grid before swing, nudge and humanize (used to decide which song section a hit belongs to).
 template <typename Fn>
@@ -212,17 +222,8 @@ void collectEvents (const Lane& lane, int laneIndex, juce::uint32 seed, double f
             if (std::abs (g16 - r16) < 0.26)
             {
                 const int slot = (int) ((((juce::int64) r16) % 16 + 16) % 16);
-                const auto& off = groove->offset[(size_t) band];
                 const auto& has = groove->has[(size_t) band];
-                // Slots this band never played borrow the timing of the other bands at that 16th.
-                float o = off[(size_t) slot];
-                if (! has[(size_t) slot])
-                {
-                    float sum = 0.0f; int cnt = 0;
-                    for (int b = 0; b < 3; ++b)
-                        if (groove->has[(size_t) b][(size_t) slot]) { sum += groove->offset[(size_t) b][(size_t) slot]; ++cnt; }
-                    o = cnt > 0 ? sum / (float) cnt : 0.0f;
-                }
+                const float o = grooveOffset (*groove, band, slot);
                 t += (double) o * 0.25 * grooveAmount; // offsets are in 16ths, a 16th is 0.25 beats
                 if (has[(size_t) slot])
                     vel *= 1.0f + (0.55f + 0.9f * groove->accent[(size_t) band][(size_t) slot] - 1.0f) * grooveAmount;

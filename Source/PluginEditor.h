@@ -183,6 +183,21 @@ private:
     template <typename Fn> void edit (Fn&& fn);
 };
 
+// A button you drag out of Groovebox: on drag it makes files and hands them to FL (or Explorer).
+class FileDragButton : public juce::TextButton
+{
+public:
+    explicit FileDragButton (const juce::String& text) : juce::TextButton (text) {}
+    std::function<juce::StringArray()> makeFiles;
+    std::function<void (const juce::StringArray&)> onDragged;
+    void paintButton (juce::Graphics&, bool over, bool down) override;
+    void mouseDrag (const juce::MouseEvent& e) override;
+    void mouseUp (const juce::MouseEvent& e) override { dragging = false; juce::TextButton::mouseUp (e); }
+
+private:
+    bool dragging = false;
+};
+
 // Bottom panel: the selected lane's sequence, big, with a row per step parameter, plus lane settings.
 class LaneEditor : public juce::Component
 {
@@ -194,16 +209,19 @@ public:
     void paint (juce::Graphics&) override;
     void tick();
     std::function<void()> onEdited;
+    std::function<void (const juce::String&)> onStatus;
 
 private:
     GrooveboxProcessor& proc;
     ViewState& view;
     int lane = 0;
+    void showMixerHelp();
 
     juce::Label title, fitLabel, hint;
     juce::ComboBox filterBox, outBox, chokeBox;
     juce::Slider reso, attack;
-    juce::TextButton reverseBtn { "Reverse" };
+    juce::TextButton reverseBtn { "Reverse" }, mixerHelpBtn { "How?" };
+    FileDragButton sampleDrag { "Sample  >  Channel Rack" }, notesDrag { "Notes  >  Piano roll" }, allDrag { "All lanes  >  Channel Rack" };
     StepGrid steps;
     std::vector<std::unique_ptr<ParamStrip>> strips;
 
@@ -216,10 +234,14 @@ class SongTimeline : public juce::Component
 public:
     explicit SongTimeline (GrooveboxProcessor& p) : proc (p) {}
     void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent& e) override { seekFrom (e); }
+    void mouseDrag (const juce::MouseEvent& e) override { seekFrom (e); }
+    std::function<void (const juce::String&)> onStatus;
     int lastBar = -2;
 
 private:
     GrooveboxProcessor& proc;
+    void seekFrom (const juce::MouseEvent&);
 };
 
 // Drop a reference loop or track here: Groovebox extracts its groove.
@@ -236,12 +258,35 @@ public:
     void choose();
     std::function<double()> forcedBpm;      // reference BPM box (0 = detect)
     std::function<void (const juce::String&)> onStatus;
+    std::function<void()> onOpen;           // show the big groove panel
 
 private:
     GrooveboxProcessor& proc;
     bool dragOver = false;
     std::unique_ptr<juce::FileChooser> chooser;
     void load (const juce::File&);
+};
+
+// Bottom panel for the reference groove: big view of what was found, and ways to use it.
+class GrooveView : public juce::Component, public juce::FileDragAndDropTarget
+{
+public:
+    explicit GrooveView (GrooveboxProcessor& p);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void refresh();
+    bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
+    void filesDropped (const juce::StringArray&, int, int) override;
+    std::function<void()> onBack, onLoad;
+    std::function<void (const juce::String&)> onStatus;
+    juce::Slider amount;
+    NumberBox bpmBox { 0, 300, 0 };
+    juce::TextButton loadBtn { "Load reference..." }, clearBtn { "Clear" }, copyBtn { "Copy groove to lanes" },
+                     timingBtn { "Copy timing only" }, backBtn { "Back to lane" };
+
+private:
+    GrooveboxProcessor& proc;
+    juce::Rectangle<int> gridArea;
 };
 
 // Full-window help screen.
@@ -258,18 +303,7 @@ private:
     juce::TextButton closeBtn { "Close" };
 };
 
-class MidiDragButton : public juce::TextButton
-{
-public:
-    MidiDragButton (GrooveboxProcessor& p) : juce::TextButton ("To piano roll"), proc (p) {}
-    std::function<void()> onDragStart;
-    void mouseDrag (const juce::MouseEvent& e) override;
-    void mouseUp (const juce::MouseEvent& e) override { dragging = false; juce::TextButton::mouseUp (e); }
 
-private:
-    GrooveboxProcessor& proc;
-    bool dragging = false;
-};
 } // namespace cg
 
 class GrooveboxEditor : public juce::AudioProcessorEditor,
@@ -293,11 +327,10 @@ private:
     juce::Label title, byline, status, bpmLabel, pageLabel;
     juce::TextButton helpBtn { "Help" }, setupsBtn { "Setups" }, libraryBtn { "Library..." }, shuffleBtn { "Shuffle samples" },
                      fitFilterBtn { "Fit filter" }, generateBtn { "Generate" }, mutateBtn { "Mutate" }, previewBtn { "Play" },
-                     seqBtn { "Sequencer" }, saveMidiBtn { "Save MIDI" }, addLaneBtn { "+ Add lane" },
+                     seqBtn { "Sequencer" }, addLaneBtn { "+ Add lane" },
                      songBtn { "Song" }, makeSongBtn { "Make song" }, pagePrev { "<" }, pageNext { ">" }, followBtn { "Follow" },
-                     editorBtn { "Lane editor" }, pianoModeBtn { "Piano roll mode" };
-    cg::MidiDragButton dragMidiBtn;
-    juce::ComboBox genreBox, barsBox, loopBox, songLenBox;
+                     editorBtn { "Lane editor" };
+    juce::ComboBox genreBox, loopBox, songLenBox;
     juce::Slider density, variation, irregular, mutateAmt, swingScale, humScale, master;
     cg::NumberBox bpmBox { 40, 300, 124 };
 
@@ -312,8 +345,9 @@ private:
     cg::LaneEditor laneEditor;
     cg::SongTimeline timeline;
     cg::GrooveSlot grooveSlot;
-    juce::Slider grooveAmt;
-    cg::NumberBox grooveBpmBox { 0, 300, 0 };
+    cg::GrooveView grooveView;
+    bool showGroove = false;
+    void setShowGroove (bool);
     int grooveReanalyzeIn = -1; // ticks until the reference is analyzed again at the new BPM
     cg::HelpOverlay help;
     std::unique_ptr<juce::FileChooser> chooser;

@@ -36,6 +36,9 @@ void mutateLane (Lane& lane, float amount, juce::Random& rng);
 // Evolve steps [from, to) only, without touching the lane length.
 void mutateRange (Lane& lane, int from, int to, float amount, juce::Random& rng);
 
+// 16-step probability template for a role, read from where a reference groove plays.
+std::array<float, 16> referenceTemplate (const Groove&, Role);
+
 // Guess a role from a folder or file name.
 Role guessRole (const juce::String& name);
 

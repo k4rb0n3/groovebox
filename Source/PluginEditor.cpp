@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "GrooveAnalysis.h"
 
 #ifndef JucePlugin_VersionString
  #define JucePlugin_VersionString "dev"
@@ -950,7 +951,7 @@ void LaneRow::tick()
         grid.repaint();
     }
 
-    const int bar = proc.currentBar.load();
+    const int bar = proc.displayBar();
     const bool nowResting = ! proc.pianoRollMode.load() && proc.songMode.load() && bar >= 0 && ! proc.laneActiveAtBar (lane, bar);
     const bool nowPiano = proc.pianoRollMode.load();
     if (nowResting != resting || nowPiano != pianoRoll)
@@ -1045,7 +1046,8 @@ void LaneRow::resized()
 LaneEditor::LaneEditor (GrooveboxProcessor& p, ViewState& v) : proc (p), view (v), steps (p, v)
 {
     for (auto* c : std::initializer_list<juce::Component*> { &title, &fitLabel, &hint, &filterBox, &outBox, &chokeBox,
-                                                             &reso, &attack, &reverseBtn, &steps })
+                                                             &reso, &attack, &reverseBtn, &steps, &mixerHelpBtn,
+                                                             &sampleDrag, &notesDrag, &allDrag })
         addAndMakeVisible (c);
 
     for (int i = 0; i < (int) Param::Count; ++i)
@@ -1065,8 +1067,52 @@ LaneEditor::LaneEditor (GrooveboxProcessor& p, ViewState& v) : proc (p), view (v
     hint.setFont (juce::FontOptions (11.0f));
     hint.setColour (juce::Label::textColourId, kDim.withAlpha (0.8f));
     hint.setJustificationType (juce::Justification::topLeft);
-    hint.setText ("Drag up and down in the rows to shape each step. Double-click resets a step; right-click a row to reset, randomize or ramp it.",
+    hint.setText ("Into FL: drag the sample onto the Channel Rack (FL makes a new channel), then drag the notes into that channel's piano roll.",
                   juce::dontSendNotification);
+
+    sampleDrag.setTooltip ("Drag onto FL's Channel Rack: FL makes a new channel with this lane's sample, with its pitch, filter, "
+                           "decay, attack, reverse, level and pan baked in");
+    notesDrag.setTooltip ("Drag into the piano roll of the channel you just made: this lane's pattern as notes, with velocity, "
+                          "step pitch, timing and groove. Length = your loop (or the whole song in Song mode)");
+    allDrag.setTooltip ("Drag onto FL's Channel Rack: one new channel per lane (muted lanes are skipped). Then drag each lane's notes into its channel");
+    sampleDrag.makeFiles = [this]
+    {
+        const auto f = proc.bakeLaneSample (lane);
+        if (! f.existsAsFile())
+        {
+            if (onStatus) onStatus ("This lane has no sample yet");
+            return juce::StringArray();
+        }
+        return juce::StringArray (f.getFullPathName());
+    };
+    sampleDrag.onDragged = [this] (const juce::StringArray&)
+    {
+        if (onStatus) onStatus ("Drop it on FL's Channel Rack. Next: open the new channel's piano roll and drag \"Notes > Piano roll\" into it.");
+    };
+    notesDrag.makeFiles = [this]
+    {
+        const auto f = proc.exportLaneMidi (lane);
+        return f.existsAsFile() ? juce::StringArray (f.getFullPathName()) : juce::StringArray();
+    };
+    notesDrag.onDragged = [this] (const juce::StringArray&)
+    {
+        if (onStatus) onStatus ("Drop the notes in the piano roll of this lane's FL channel (the notes sit on C5, the sample's own pitch).");
+    };
+    allDrag.makeFiles = [this]
+    {
+        juce::StringArray out;
+        for (const auto& f : proc.bakeAllLaneSamples())
+            out.add (f.getFullPathName());
+        if (out.isEmpty() && onStatus) onStatus ("No lanes with samples to send");
+        return out;
+    };
+    allDrag.onDragged = [this] (const juce::StringArray& f)
+    {
+        if (onStatus) onStatus ("Drop on FL's Channel Rack: " + juce::String (f.size()) + " new channels. Then click each lane here and drag its notes into its channel's piano roll.");
+    };
+
+    mixerHelpBtn.setTooltip ("How to give every lane its own FL mixer track");
+    mixerHelpBtn.onClick = [this] { showMixerHelp(); };
 
     filterBox.addItem ("Filter off", 1);
     filterBox.addItem ("Low-pass", 2);
@@ -1074,10 +1120,7 @@ LaneEditor::LaneEditor (GrooveboxProcessor& p, ViewState& v) : proc (p), view (v
     filterBox.addItem ("Band-pass", 4);
     filterBox.setTooltip ("Lane filter. Its cutoff is the Cut knob on the lane (automatable); the Cutoff row darkens single hits");
 
-    outBox.addItem ("Own output", 1);
-    outBox.addItem ("Main output", 2);
-    for (int o = 2; o <= kNumOuts; ++o) outBox.addItem ("Output " + juce::String (o), o + 1);
-    outBox.setTooltip ("Which Groovebox output this lane plays on. 'Own output' = its own mixer track after Auto map outputs (see Help)");
+    outBox.setTooltip ("Which mixer track this lane plays on while it plays inside Groovebox. Needs Auto map outputs once (click How?)");
 
     chokeBox.addItem ("No choke", 1);
     for (int c = 1; c <= 4; ++c) chokeBox.addItem ("Choke group " + juce::String (c), c + 1);
@@ -1115,6 +1158,18 @@ void LaneEditor::edit (Fn&& fn)
     fn (proc.lanes[(size_t) lane]);
 }
 
+void LaneEditor::showMixerHelp()
+{
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Each lane on its own mixer track",
+        "While lanes play inside Groovebox:\n"
+        "1. Click the small gear/arrow at the top left of Groovebox's window (the FL plugin wrapper) and open the Processing tab.\n"
+        "2. Click \"Auto map outputs\". FL gives each Groovebox output its own mixer track.\n"
+        "3. Here, Mixer track \"Own\" means lane 1 goes to the first of those tracks, lane 2 to the second, and so on. "
+        "Pick another track to send several lanes to the same one.\n\n"
+        "Lanes you sent to FL as channels (Sample > Channel Rack): set the mixer track in FL, in the small number box "
+        "on the channel in the Channel Rack (or the channel's settings).");
+}
+
 void LaneEditor::setLane (int li)
 {
     lane = juce::jlimit (0, kMaxLanes - 1, li);
@@ -1143,7 +1198,12 @@ void LaneEditor::refresh()
     fitLabel.setText (info, n);
 
     filterBox.setSelectedId ((int) l.filter + 1, n);
+    outBox.clear (n);
+    outBox.addItem ("Own: mixer track for out " + juce::String (lane + 1), 1);
+    outBox.addItem ("Main (with lane 1)", 2);
+    for (int o = 2; o <= kNumOuts; ++o) outBox.addItem ("Same as lane " + juce::String (o) + " (out " + juce::String (o) + ")", o + 1);
     outBox.setSelectedId (l.out + 2, n);
+    sampleDrag.setEnabled (l.sample != nullptr);
     chokeBox.setSelectedId (l.choke + 1, n);
     reso.setValue (l.reso, n);
     attack.setValue (l.attack, n);
@@ -1174,7 +1234,8 @@ void LaneEditor::paint (juce::Graphics& g)
     g.setColour (kDim);
     g.setFont (juce::FontOptions (10.5f));
     const std::pair<juce::Component*, const char*> caps[] = { { &filterBox, "Filter" }, { &reso, "Res" }, { &attack, "Attack" },
-                                                             { &outBox, "Output" }, { &chokeBox, "Choke" } };
+                                                             { &outBox, "Mixer track (inside Groovebox)" }, { &chokeBox, "Choke" },
+                                                             { &sampleDrag, "Send this lane to FL as its own channel" } };
     for (auto [c, label] : caps)
         g.drawText (label, c->getX(), c->getY() - 14, c->getWidth() + 30, 13, juce::Justification::centredLeft, false);
 }
@@ -1183,11 +1244,11 @@ void LaneEditor::resized()
 {
     auto r = getLocalBounds().reduced (10, 8);
 
-    auto left = r.removeFromLeft (292);
+    auto left = r.removeFromLeft (330);
     r.removeFromLeft (14);
     title.setBounds (left.removeFromTop (22));
-    fitLabel.setBounds (left.removeFromTop (36));
-    left.removeFromTop (16);
+    fitLabel.setBounds (left.removeFromTop (32));
+    left.removeFromTop (14);
 
     auto row1 = left.removeFromTop (26);
     filterBox.setBounds (row1.removeFromLeft (110));
@@ -1200,10 +1261,19 @@ void LaneEditor::resized()
 
     left.removeFromTop (18);
     auto row2 = left.removeFromTop (26);
-    outBox.setBounds (row2.removeFromLeft (120));
-    row2.removeFromLeft (10);
-    chokeBox.setBounds (row2.removeFromLeft (120));
-    left.removeFromTop (8);
+    outBox.setBounds (row2.removeFromLeft (170));
+    row2.removeFromLeft (4);
+    mixerHelpBtn.setBounds (row2.removeFromLeft (44));
+    row2.removeFromLeft (8);
+    chokeBox.setBounds (row2);
+    left.removeFromTop (20);
+    auto row3 = left.removeFromTop (28);
+    sampleDrag.setBounds (row3.removeFromLeft (row3.getWidth() / 2 - 3));
+    row3.removeFromLeft (6);
+    notesDrag.setBounds (row3);
+    left.removeFromTop (6);
+    allDrag.setBounds (left.removeFromTop (26));
+    left.removeFromTop (4);
     hint.setBounds (left);
 
     const int stripCount = (int) strips.size();
@@ -1241,7 +1311,7 @@ void GrooveSlot::paint (juce::Graphics& g)
     if (! gr.valid)
     {
         g.setColour (kDim);
-        g.drawText ("Groove: drop a loop or track here", inner, juce::Justification::centredLeft, true);
+        g.drawText ("Reference groove: drop a loop or track here", inner, juce::Justification::centredLeft, true);
         return;
     }
 
@@ -1268,13 +1338,14 @@ void GrooveSlot::paint (juce::Graphics& g)
     g.drawText ("Groove: " + gr.name, inner.removeFromTop (inner.getHeight() / 2), juce::Justification::bottomLeft, true);
     g.setColour (kDim);
     g.setFont (juce::FontOptions (10.0f));
-    g.drawText (juce::String (juce::roundToInt (gr.bpm)) + " BPM, " + juce::String (gr.bars) + " bars", inner,
+    g.drawText (juce::String (juce::roundToInt (gr.bpm)) + " BPM, " + juce::String (gr.bars) + " bars.  Click to open, copy or adjust", inner,
                 juce::Justification::topLeft, true);
 }
 
 void GrooveSlot::load (const juce::File& f)
 {
     if (! f.existsAsFile()) return;
+    if (onOpen) onOpen();
     proc.loadGroove (f, forcedBpm ? forcedBpm() : 0.0);
     if (onStatus) onStatus ("Listening to " + f.getFileName() + "...");
     repaint();
@@ -1299,7 +1370,8 @@ void GrooveSlot::mouseUp (const juce::MouseEvent& e)
 {
     if (! e.mods.isPopupMenu())
     {
-        choose();
+        if (onOpen) onOpen();
+        if (! proc.groove.valid && ! proc.grooveBusy.load()) choose();
         return;
     }
     juce::PopupMenu m;
@@ -1348,13 +1420,30 @@ void SongTimeline::paint (juce::Graphics& g)
         g.drawText (s.name + " " + juce::String (s.bars), b.toNearestInt().reduced (4, 0), juce::Justification::centredLeft, true);
     }
 
-    const int bar = proc.currentBar.load();
+    const int bar = proc.displayBar();
     if (bar >= 0 && bar < proc.songBars)
     {
         const float x = r.getX() + r.getWidth() * ((float) bar + 0.5f) / total;
-        g.setColour (juce::Colours::white);
+        g.setColour (proc.currentBar.load() >= 0 ? juce::Colours::white : kAccent);
         g.fillRect (x - 1.0f, r.getY(), 2.0f, r.getHeight());
+        g.fillEllipse (x - 4.0f, r.getY() - 1.0f, 8.0f, 8.0f);
     }
+}
+
+void SongTimeline::seekFrom (const juce::MouseEvent& e)
+{
+    if (! proc.songMode.load() || proc.songSections.empty()) return;
+    const int bars = juce::jmax (1, proc.songBars);
+    const int bar = juce::jlimit (0, bars - 1, (int) ((float) e.x / (float) juce::jmax (1, getWidth()) * (float) bars));
+    proc.seekTo (bar * 4.0);
+    juce::String sec;
+    for (const auto& s : proc.songSections)
+        if (bar >= s.startBar && bar < s.startBar + s.bars) sec = s.name;
+    if (onStatus)
+        onStatus (proc.hostIsPlaying.load()
+                      ? juce::String ("FL is playing, so FL's song position leads. Stop FL to scrub here, or move FL's playhead.")
+                      : "Bar " + juce::String (bar + 1) + " (" + sec + "). Play starts here; lanes that rest here are dimmed.");
+    repaint();
 }
 
 //==============================================================================
@@ -1394,7 +1483,8 @@ HelpOverlay::HelpOverlay()
     p ("1. Click Library... and pick the folder with your drum samples. Groovebox finds the kick, snare, hat... folders and gives each its own lane.\n"
        "2. Pick a genre and press Generate. Press Play in FL (or Play here).\n"
        "3. Hover a sample name and scroll the mouse wheel to try other samples while it plays.\n"
-       "4. Click a lane to edit it in the big editor at the bottom.");
+       "4. Click a lane to edit it in the big editor at the bottom.\n"
+       "5. Happy with it? In that editor, drag the lane's sample onto FL's Channel Rack and its notes into that channel's piano roll.");
 
     h ("Each lane");
     p ("M / S: mute / solo.\n"
@@ -1418,14 +1508,14 @@ HelpOverlay::HelpOverlay()
        "Filter + Res: low-pass, high-pass or band-pass for the whole lane. Attack: fade-in on each hit. Reverse: play backwards.\n"
        "The Lane editor button bottom right hides or shows this panel.");
 
-    h ("Output: one mixer track per lane");
-    p ("Output decides which of Groovebox's audio outputs a lane plays on. 'Own output' means lane 1 uses output 1, lane 2 uses output 2, and so on.\n"
-       "To get every lane on its own FL mixer track:\n"
+    h ("Mixer tracks");
+    p ("Each lane can have its own FL mixer track. In the lane editor (bottom), Mixer track picks where the lane goes; the How? button repeats these steps.\n"
+       "Lanes playing inside Groovebox:\n"
        "  1. Click the small plugin options icon at the top left of Groovebox's window (FL's plugin wrapper).\n"
-       "  2. Open the Processing tab.\n"
-       "  3. Click Auto map outputs.\n"
-       "FL then sends each lane to its own mixer track. Until you do this, everything plays through the main output, which is fine too.\n"
-       "'Main output' keeps a lane on the main output even when the others have their own tracks. 'Output 2...32' lets lanes share a track.");
+       "  2. Open the Processing tab and click Auto map outputs.\n"
+       "  3. Done: lane 1 lands on the first new mixer track, lane 2 on the next, and so on (Mixer track: Own).\n"
+       "Pick \"Same as lane N\" to share a track, or \"Main\" to stay on Groovebox's main track. Until step 2, everything plays on one track.\n"
+       "Lanes you sent to FL as channels (see below): set the mixer track on the FL channel itself, in the number box on the channel in the Channel Rack.");
 
     h ("Choke");
     p ("Lanes in the same choke group cut each other off, like a real hi-hat: the open hat stops the moment the closed hat plays. "
@@ -1442,19 +1532,21 @@ HelpOverlay::HelpOverlay()
     h ("Song mode: a full track");
     p ("Turn on Song, pick a length and press Make song. Groovebox arranges intro, build, main, break and outro sections and decides "
        "which lanes play in each (the kick drops out in the last bar of a build). It follows FL's song position, so press Play from the start "
-       "of the song. Lanes that sit out the current section are dimmed. To piano roll and Save MIDI export the whole arrangement.");
+       "of the song. Lanes that sit out the current section are dimmed. Click or drag on the song strip to scrub: the marker shows where "
+       "Groovebox's own Play starts, and which lanes play there. The notes you send to FL cover the whole song.");
 
     h ("Groove from a reference");
-    p ("Drop a drum loop, or a whole track you love, on the Groove box above the lanes (or click it to choose a file). "
+    p ("Drop a drum loop, or a whole track you love, on the Reference groove box (top right, above the lanes), or click it. "
        "Groovebox listens to it, finds its tempo and bar, and measures for every 16th how early or late and how loud its "
-       "lows (kick, bass), mids (snare, clap, perc) and highs (hats, shakers, ride) play. The little grid shows what it found: "
-       "red lows, orange mids, blue highs; a bar left or right of centre means early or late.\n"
-       "Your lanes then move towards that feel, each lane following its own band. Groove sets how far (0 = off). "
+       "lows (kick, bass), mids (snare, clap, perc) and highs (hats, shakers, ride) play. Click the box to open the big Groove panel at the bottom: "
+       "it shows every 16th, how loud (bar height), how often (%) and how early or late (ms).\n"
+       "Your lanes then move towards that feel while they play, each lane following its own band. Groove amount sets how far (0 = off). "
+       "Or make it permanent: Copy groove to lanes writes the reference's hits, accents and timing into your lanes; "
+       "Copy timing only keeps your patterns and gives them its push and drag (Nudge and Velocity rows). Ctrl+Z undoes either.\n"
        "Global swing is set to 0 when a groove loads, because the reference brings its own swing.\n"
        "Pick the genre \"From reference groove\" and press Generate to also write patterns from where the reference hits.\n"
-       "Tempo is detected automatically; if it picks half or double, drag the Ref box to the real tempo and it listens again. "
-       "Loops that start on the downbeat work best. Right-click the Groove box to analyze again or clear it. "
-       "The feel goes along into To piano roll and Save MIDI.");
+       "Tempo is detected automatically; if it picks half or double, drag the Tempo box in the Groove panel to the real tempo and it listens again. "
+       "Clean drum loops work best. The feel goes along when you send lanes to FL.");
 
     h ("Tempo");
     p ("When FL plays, Groovebox follows FL's tempo, so set FL's tempo to suit the genre. The BPM box sets the tempo for Groovebox's own Play button.");
@@ -1463,15 +1555,17 @@ HelpOverlay::HelpOverlay()
     p ("Setups > Save setup as... stores everything (folders, samples, patterns, knobs). A new Groovebox opens with your last session, "
        "which is saved automatically every few seconds. Setups > Load last session brings it back.");
 
-    h ("Into FL's piano roll");
-    p ("1. Open Groovebox's piano roll: right-click Groovebox in FL's Channel Rack and choose Piano roll.\n"
-       "2. Set how many bars to export (the box next to To piano roll; in Song mode the whole song is exported).\n"
-       "3. Drag the To piano roll button into that piano roll window.\n"
-       "Groovebox switches to Piano roll mode: its own sequencer stops and it plays the notes in the piano roll instead. "
-       "Each lane is one note row (C3 = lane 1, C#3 = lane 2...), shown on each lane. Your samples, filters, outputs and automation stay, "
-       "and each note picks up the pitch, pan, cutoff and sample start of the step it sits on. Velocity is in the notes, ratchets become real notes. "
-       "Notes you add or move to an empty step play with the lane's normal sound. Probability is decided at export.\n"
-       "Turn Piano roll mode off to go back to Groovebox's own sequencer. Save MIDI writes the same clip to Documents\\Groovebox\\MIDI.");
+    h ("Send lanes to FL as their own channels");
+    p ("Click a lane, then use the dashed drag buttons in the lane editor (bottom):\n"
+       "  1. Drag \"Sample > Channel Rack\" onto FL's Channel Rack. FL makes a new channel with that lane's sample. "
+       "The lane's pitch, filter, decay, attack, reverse, level and pan are baked into it, so it sounds like it does here.\n"
+       "  2. Open that new channel's piano roll and drag \"Notes > Piano roll\" into it. The lane's pattern lands as notes "
+       "on C5 (the sample's own pitch), with velocity, step pitch, ratchets, swing and the reference groove. "
+       "Length = your loop, or the whole song when Song is on.\n"
+       "\"All lanes > Channel Rack\" makes every channel in one go; then click each lane and drag its notes into its channel.\n"
+       "From then on they're normal FL channels: edit them however you like. Per-step pan, cutoff and sample start stay in Groovebox "
+       "(FL channels can't take them per note). The files are kept in Documents\\Groovebox\\To FL (Setups > Open the To FL folder).\n"
+       "Setups > Save all lanes as one MIDI file writes every lane into one .mid (C3 = lane 1, C#3 = lane 2...).");
 
     text.moveCaretToTop (false);
 }
@@ -1497,22 +1591,238 @@ void HelpOverlay::resized()
 }
 
 //==============================================================================
-void MidiDragButton::mouseDrag (const juce::MouseEvent& e)
+void FileDragButton::paintButton (juce::Graphics& g, bool over, bool down)
+{
+    auto r = getLocalBounds().toFloat().reduced (1.0f);
+    const auto accent = findColour (juce::TextButton::buttonOnColourId);
+    g.setColour (juce::Colour (0xff2a2e35).brighter (over ? 0.15f : 0.0f).darker (down ? 0.2f : 0.0f));
+    g.fillRoundedRectangle (r, 4.0f);
+    juce::Path border;
+    border.addRoundedRectangle (r, 4.0f);
+    juce::Path dashed;
+    const float dash[] = { 4.0f, 3.0f };
+    juce::PathStrokeType (1.2f).createDashedStroke (dashed, border, dash, 2);
+    g.setColour (isEnabled() ? accent.withAlpha (over ? 1.0f : 0.7f) : kDim.withAlpha (0.4f));
+    g.fillPath (dashed);
+
+    // Grip dots: "pick me up".
+    auto grip = r.removeFromLeft (16.0f).reduced (5.0f, r.getHeight() * 0.25f);
+    for (int y = 0; y < 3; ++y)
+        for (int x = 0; x < 2; ++x)
+            g.fillEllipse (grip.getX() + (float) x * 4.0f, grip.getY() + (float) y * grip.getHeight() / 2.5f, 2.2f, 2.2f);
+
+    g.setColour (isEnabled() ? kText : kDim);
+    g.setFont (juce::FontOptions (12.0f));
+    g.drawText (getButtonText(), r.toNearestInt(), juce::Justification::centred, true);
+}
+
+void FileDragButton::mouseDrag (const juce::MouseEvent& e)
 {
     juce::TextButton::mouseDrag (e);
-    if (dragging || e.getDistanceFromDragStart() < 6)
+    if (dragging || e.getDistanceFromDragStart() < 6 || ! makeFiles)
         return;
 
     dragging = true;
-    if (onDragStart) onDragStart();
-    const auto f = proc.exportMidi();
-    if (f.existsAsFile())
-        juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this);
+    const auto files = makeFiles();
+    if (files.isEmpty())
+        return;
+    if (onDragged) onDragged (files);
+    juce::DragAndDropContainer::performExternalDragDropOfFiles (files, false, this);
+}
+
+//==============================================================================
+GrooveView::GrooveView (GrooveboxProcessor& p) : proc (p)
+{
+    for (auto* c : std::initializer_list<juce::Component*> { &amount, &bpmBox, &loadBtn, &clearBtn, &copyBtn, &timingBtn, &backBtn })
+        addAndMakeVisible (c);
+
+    amount.setSliderStyle (juce::Slider::LinearBar);
+    amount.setTextBoxStyle (juce::Slider::TextBoxLeft, true, 120, 20);
+    amount.setRange (0.0, 1.0, 0.01);
+    amount.textFromValueFunction = [] (double v) { return "Groove amount " + juce::String (juce::roundToInt (v * 100.0)) + "%"; };
+    amount.setDoubleClickReturnValue (true, 0.8);
+    amount.setTooltip ("How far your lanes move towards the reference's timing and accents while they play (0 = off)");
+
+    bpmBox.format = [] (int v) { return v <= 0 ? juce::String ("Tempo: auto") : "Tempo: " + juce::String (v) + " BPM"; };
+    bpmBox.setTooltip ("Tempo of the reference. Auto detects it; if it picks half or double, drag to the real tempo and it listens again");
+
+    loadBtn.setTooltip ("Pick a loop or a track (or drop one anywhere on this panel)");
+    clearBtn.setTooltip ("Forget the reference groove");
+    copyBtn.setTooltip ("Write the reference into your lanes: where it hits, how loud, and how early or late. "
+                        "Kick from the lows, snare and clap from the loud mids, hats from the highs. Pattern-locked lanes are kept. Ctrl+Z undoes it");
+    timingBtn.setTooltip ("Keep your patterns, but give their hits the reference's push and drag and its accents (written into Nudge and Velocity). Ctrl+Z undoes it");
+    backBtn.setTooltip ("Back to the lane editor");
+
+    loadBtn.onClick = [this] { if (onLoad) onLoad(); };
+    backBtn.onClick = [this] { if (onBack) onBack(); };
+    clearBtn.onClick = [this]
+    {
+        proc.clearGroove();
+        if (onStatus) onStatus ("Groove cleared");
+        refresh();
+    };
+    copyBtn.onClick = [this]
+    {
+        proc.applyGrooveToLanes (true);
+        if (onStatus) onStatus ("Copied the reference groove into your lanes (hits, accents and timing). Groove amount set to 0 so it isn't applied twice. Ctrl+Z undoes it.");
+        refresh();
+    };
+    timingBtn.onClick = [this]
+    {
+        proc.applyGrooveToLanes (false);
+        if (onStatus) onStatus ("Your patterns now carry the reference's timing and accents (see the Nudge and Velocity rows). Ctrl+Z undoes it.");
+        refresh();
+    };
+}
+
+void GrooveView::refresh()
+{
+    amount.setValue (proc.grooveAmount, juce::dontSendNotification);
+    amount.updateText();
+    bpmBox.setValue (juce::roundToInt (proc.grooveForcedBpm), false);
+    const bool ok = proc.groove.valid;
+    for (auto* b : { &clearBtn, &copyBtn, &timingBtn })
+        b->setEnabled (ok);
+    amount.setEnabled (ok);
+    repaint();
+}
+
+void GrooveView::filesDropped (const juce::StringArray& files, int, int)
+{
+    if (files.isEmpty()) return;
+    const juce::File f (files[0]);
+    if (! f.existsAsFile()) return;
+    proc.loadGroove (f, (double) bpmBox.getValue());
+    if (onStatus) onStatus ("Listening to " + f.getFileName() + "...");
+    repaint();
+}
+
+void GrooveView::resized()
+{
+    auto r = getLocalBounds().reduced (10, 8);
+    auto left = r.removeFromLeft (230);
+    r.removeFromLeft (14);
+    left.removeFromTop (64);
+    for (auto* b : std::initializer_list<juce::Component*> { &loadBtn, &bpmBox, &amount })
+    {
+        b->setBounds (left.removeFromTop (26));
+        left.removeFromTop (6);
+    }
+    left.removeFromTop (6);
+    copyBtn.setBounds (left.removeFromTop (28));
+    left.removeFromTop (6);
+    auto row = left.removeFromTop (26);
+    timingBtn.setBounds (row.removeFromLeft (row.getWidth() / 2 + 20));
+    row.removeFromLeft (6);
+    clearBtn.setBounds (row);
+    backBtn.setBounds (left.removeFromBottom (24).removeFromLeft (110));
+    gridArea = r;
+}
+
+void GrooveView::paint (juce::Graphics& g)
+{
+    g.setColour (kPanel);
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+
+    Groove gr;
+    {
+        const juce::SpinLock::ScopedLockType sl (proc.lock);
+        gr = proc.groove;
+    }
+
+    auto head = getLocalBounds().reduced (10, 8).removeFromLeft (230);
+    g.setColour (kAccent);
+    g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+    g.drawText ("Reference groove", head.removeFromTop (22), juce::Justification::centredLeft, false);
+    g.setColour (kDim);
+    g.setFont (juce::FontOptions (11.5f));
+    g.drawFittedText (proc.grooveBusy.load() ? juce::String ("Listening...")
+                      : gr.valid ? gr.name + "\n" + describeGroove (gr)
+                                 : juce::String ("Drop a drum loop or a track you love on this panel."),
+                      head.removeFromTop (40), juce::Justification::topLeft, 3);
+
+    auto r = gridArea;
+    if (! gr.valid)
+    {
+        g.setColour (kRow);
+        g.fillRoundedRectangle (r.toFloat(), 4.0f);
+        g.setColour (kDim);
+        g.setFont (juce::FontOptions (13.0f));
+        g.drawFittedText ("Drop a loop or a track here.\n\nGroovebox finds its tempo and, for every 16th, where its kick, snare and hats hit, "
+                          "how loud, and how early or late. You'll see it here, and can copy it into your lanes.",
+                          r.reduced (40, 20), juce::Justification::centred, 6);
+        return;
+    }
+
+    // Header: beat numbers.
+    const int labelW = 70;
+    auto header = r.removeFromTop (18);
+    header.removeFromLeft (labelW);
+    const float cw = (float) header.getWidth() / 16.0f;
+    static const char* const counts[] = { "1", "e", "+", "a", "2", "e", "+", "a", "3", "e", "+", "a", "4", "e", "+", "a" };
+    g.setFont (juce::FontOptions (11.0f));
+    for (int i = 0; i < 16; ++i)
+    {
+        g.setColour (i % 4 == 0 ? kText : kDim);
+        g.drawText (counts[i], juce::Rectangle<float> ((float) header.getX() + cw * (float) i, (float) header.getY(), cw, 16.0f),
+                    juce::Justification::centred, false);
+    }
+
+    static const juce::uint32 bandCol[] = { 0xffd06a5a, 0xffd0a35a, 0xff6ab4d0 };
+    static const char* const bandName[] = { "Lows\nkick, bass", "Mids\nsnare, clap", "Highs\nhats, ride" };
+    auto foot = r.removeFromBottom (16);
+    const float rowH = (float) r.getHeight() / 3.0f;
+    const double msPerStep = gr.bpm > 0 ? 60000.0 / gr.bpm / 4.0 : 0.0;
+
+    for (int b = 0; b < 3; ++b)
+    {
+        auto row = juce::Rectangle<float> ((float) r.getX(), (float) r.getY() + rowH * (float) b, (float) r.getWidth(), rowH).reduced (0.0f, 2.0f);
+        g.setColour (juce::Colour (bandCol[b]));
+        g.setFont (juce::FontOptions (11.5f));
+        g.drawFittedText (bandName[b], row.removeFromLeft ((float) labelW).toNearestInt(), juce::Justification::centredLeft, 2);
+
+        for (int i = 0; i < 16; ++i)
+        {
+            auto cell = juce::Rectangle<float> (row.getX() + cw * (float) i, row.getY(), cw, row.getHeight()).reduced (1.5f, 0.0f);
+            g.setColour (juce::Colour (i % 4 == 0 ? 0xff2e3238 : 0xff25282d));
+            g.fillRoundedRectangle (cell, 3.0f);
+            const float p = juce::jmin (1.0f, gr.prob[(size_t) b][(size_t) i]);
+            if (p <= 0.0f) continue;
+
+            const float acc = gr.accent[(size_t) b][(size_t) i];
+            const float off = gr.offset[(size_t) b][(size_t) i];
+            // Bar: height = loudness, brightness = how often it plays.
+            auto bar = cell.reduced (cell.getWidth() * 0.22f, 3.0f);
+            const float h = bar.getHeight() * juce::jmax (0.12f, acc) * 0.8f;
+            auto filled = bar.withTrimmedTop (bar.getHeight() - h).withTrimmedBottom (bar.getHeight() * 0.2f - 0.0f).translated (0.0f, 0.0f);
+            filled = juce::Rectangle<float> (bar.getX(), bar.getBottom() - bar.getHeight() * 0.2f - h, bar.getWidth(), h);
+            g.setColour (juce::Colour (bandCol[b]).withAlpha (0.3f + 0.7f * p));
+            g.fillRoundedRectangle (filled.translated (off * cw, 0.0f), 2.0f);
+
+            // Timing line: centre = on the grid.
+            g.setColour (kDim.withAlpha (0.5f));
+            g.drawVerticalLine ((int) cell.getCentreX(), cell.getY() + 2.0f, cell.getBottom() - 2.0f);
+
+            // Text: early/late in ms (and how often, if not every bar).
+            g.setColour (kText.withAlpha (0.85f));
+            g.setFont (juce::FontOptions (9.5f));
+            const int ms = juce::roundToInt (off * msPerStep);
+            juce::String t = ms == 0 ? juce::String ("on") : (ms > 0 ? "+" : "") + juce::String (ms) + "ms";
+            g.drawText (t, cell.withTrimmedTop (cell.getHeight() - 14.0f).toNearestInt(), juce::Justification::centred, false);
+            if (p < 0.95f)
+                g.drawText (juce::String (juce::roundToInt (p * 100.0f)) + "%", cell.withHeight (13.0f).toNearestInt(), juce::Justification::centred, false);
+        }
+    }
+
+    g.setColour (kDim);
+    g.setFont (juce::FontOptions (10.5f));
+    g.drawText ("Bar height = how loud. Bar left/right of the line = early/late (ms). % = how often it plays (blank = every bar).",
+                foot.withTrimmedLeft (labelW), juce::Justification::centredLeft, true);
 }
 
 //==============================================================================
 GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
-    : AudioProcessorEditor (&p), proc (p), dragMidiBtn (p), laneEditor (p, view), timeline (p), grooveSlot (p)
+    : AudioProcessorEditor (&p), proc (p), laneEditor (p, view), timeline (p), grooveSlot (p), grooveView (p)
 {
     setLookAndFeel (&look);
     proc.editorEverOpened = true;
@@ -1537,10 +1847,10 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
 
     for (auto* c : std::initializer_list<juce::Component*> {
              &title, &byline, &status, &bpmLabel, &pageLabel, &helpBtn, &setupsBtn, &libraryBtn, &shuffleBtn, &fitFilterBtn,
-             &generateBtn, &mutateBtn, &previewBtn, &seqBtn, &saveMidiBtn, &dragMidiBtn, &genreBox, &barsBox, &loopBox,
+             &generateBtn, &mutateBtn, &previewBtn, &seqBtn, &genreBox, &loopBox,
              &songLenBox, &songBtn, &makeSongBtn, &pagePrev, &pageNext, &followBtn, &editorBtn, &density, &variation,
-             &irregular, &mutateAmt, &swingScale, &humScale, &master, &bpmBox, &viewport, &laneEditor, &timeline, &pianoModeBtn,
-             &grooveSlot, &grooveAmt, &grooveBpmBox })
+             &irregular, &mutateAmt, &swingScale, &humScale, &master, &bpmBox, &viewport, &laneEditor, &timeline,
+             &grooveSlot, &grooveView })
         addAndMakeVisible (c);
     addChildComponent (help);
 
@@ -1575,10 +1885,6 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     loopBox.setTooltip ("How many bars Generate writes. Long loops evolve bar by bar, with small fills every 4 and 8 bars");
     loopBox.onChange = [this] { proc.gen.bars = loopBox.getSelectedId(); };
 
-    for (int b : { 1, 2, 4, 8, 16, 32, 64 })
-        barsBox.addItem (juce::String (b) + (b == 1 ? " bar" : " bars"), b);
-    barsBox.setTooltip ("How many bars To piano roll and Save MIDI export in loop mode (song mode exports the whole song)");
-    barsBox.onChange = [this] { proc.exportBars = barsBox.getSelectedId(); };
 
     for (int b : { 32, 64, 96, 128 })
         songLenBox.addItem (juce::String (b) + " bars", b);
@@ -1616,13 +1922,17 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     grooveSlot.setTooltip ("Drop a drum loop or a track you love here (or click to choose one). Groovebox finds its tempo and, "
                            "for every 16th, how early or late and how loud its lows, mids and highs play, then moves your lanes towards it. "
                            "Pick the genre \"From reference groove\" to also generate patterns from where it hits. Right-click to clear.");
-    grooveSlot.forcedBpm = [this] { return (double) grooveBpmBox.getValue(); };
+    grooveSlot.forcedBpm = [this] { return (double) grooveView.bpmBox.getValue(); };
     grooveSlot.onStatus = [this] (const juce::String& t) { status.setText (t, juce::dontSendNotification); };
-    setupBar (grooveAmt, "Groove", proc.grooveAmount, [this] (float v) { proc.setGrooveAmount (v); });
-    grooveAmt.setTooltip ("How far the lanes move towards the reference's timing and accents (0 = off)");
-    grooveBpmBox.format = [] (int v) { return v <= 0 ? juce::String ("Ref auto") : "Ref " + juce::String (v); };
-    grooveBpmBox.setTooltip ("Tempo of the reference. Auto detects it; if it picks half or double, drag to set it (then it's analyzed again)");
-    grooveBpmBox.onChange = [this] (int) { grooveReanalyzeIn = 12; };
+    grooveSlot.onOpen = [this] { setShowGroove (true); };
+    grooveView.onStatus = grooveSlot.onStatus;
+    grooveView.onBack = [this] { setShowGroove (false); };
+    grooveView.onLoad = [this] { grooveSlot.choose(); };
+    grooveView.bpmBox.onChange = [this] (int) { grooveReanalyzeIn = 12; };
+    grooveView.amount.onValueChange = [this] { proc.setGrooveAmount ((float) grooveView.amount.getValue()); };
+    laneEditor.onStatus = grooveSlot.onStatus;
+    timeline.onStatus = grooveSlot.onStatus;
+    timeline.setMouseCursor (juce::MouseCursor::IBeamCursor);
 
     for (auto* s : { &swingScale, &humScale })
     {
@@ -1674,44 +1984,12 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     mutateBtn.setTooltip ("Evolve the current groove instead of replacing it (pattern-locked lanes are kept)");
     shuffleBtn.setTooltip ("Pick a new sample in every lane, favouring good fits (sample-locked lanes are kept)");
     libraryBtn.setTooltip ("Pick your sample library root; subfolders are matched to lanes by name (kicks, hats, perc...)");
-    dragMidiBtn.setTooltip ("Drag this into Groovebox's piano roll: the groove (or the whole song) lands there as notes and "
-                            "Groovebox switches to Piano roll mode, keeping its sounds and step settings");
-    saveMidiBtn.setTooltip ("Save the groove (or the whole song) as a .mid file in Documents/Groovebox/MIDI");
     setupsBtn.setTooltip ("Save this setup, load a saved one, or go back to your last session");
 
     setupsBtn.onClick   = [this] { showSetupsMenu(); };
     generateBtn.onClick = [this] { proc.generateAll(); };
     mutateBtn.onClick   = [this] { proc.mutateAll(); };
     shuffleBtn.onClick  = [this] { proc.shuffleAllSamples(); };
-    dragMidiBtn.onClick = [this]
-    {
-        status.setText ("Drag this button into Groovebox's piano roll (right-click Groovebox in the Channel Rack > Piano roll). "
-                        "Groovebox then plays from the piano roll, keeping its sounds and step settings.", juce::dontSendNotification);
-    };
-    dragMidiBtn.onDragStart = [this]
-    {
-        proc.pianoRollMode = true;
-        pianoModeBtn.setToggleState (true, juce::dontSendNotification);
-        status.setText ("Drop it in Groovebox's piano roll. Piano roll mode is on: the notes there now play Groovebox "
-                        "(C3 = lane 1, C#3 = lane 2...). Turn Piano roll mode off to go back to the internal sequencer.",
-                        juce::dontSendNotification);
-    };
-    pianoModeBtn.setClickingTogglesState (true);
-    pianoModeBtn.setTooltip ("On: Groovebox plays the notes in its FL piano roll (C3 = lane 1...) instead of its own sequencer, "
-                             "keeping its sounds and step settings. Off: the internal sequencer plays");
-    pianoModeBtn.onClick = [this]
-    {
-        proc.pianoRollMode = pianoModeBtn.getToggleState();
-        status.setText (proc.pianoRollMode.load() ? "Piano roll mode on: Groovebox plays the notes from its piano roll."
-                                                  : "Piano roll mode off: Groovebox's own sequencer plays again.",
-                        juce::dontSendNotification);
-    };
-    saveMidiBtn.onClick = [this]
-    {
-        const auto f = proc.exportMidi();
-        status.setText ("Saved " + f.getFileName() + " to Documents/Groovebox/MIDI", juce::dontSendNotification);
-        f.revealToUser();
-    };
     libraryBtn.onClick = [this]
     {
         auto start = proc.libraryRoot.isDirectory() ? proc.libraryRoot
@@ -1850,6 +2128,9 @@ void GrooveboxEditor::showSetupsMenu()
     m.addSeparator();
     m.addItem (3, "Load setup from file...");
     m.addItem (4, "Open setups folder");
+    m.addSeparator();
+    m.addItem (5, "Save all lanes as one MIDI file (C3 = lane 1...)");
+    m.addItem (6, "Open the To FL folder (baked samples and notes)");
 
     juce::Component::SafePointer<GrooveboxEditor> self (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&setupsBtn), [self, saved] (int r)
@@ -1882,6 +2163,17 @@ void GrooveboxEditor::showSetupsMenu()
         else if (r == 4)
         {
             GrooveboxProcessor::setupsFolder().revealToUser();
+        }
+        else if (r == 5)
+        {
+            p.exportBars = p.exportLengthBars();
+            const auto f = p.exportMidi();
+            say ("Saved " + f.getFileName() + " to Documents/Groovebox/MIDI");
+            f.revealToUser();
+        }
+        else if (r == 6)
+        {
+            GrooveboxProcessor::flExportFolder().revealToUser();
         }
         else if (r >= 100 && r - 100 < saved.size())
         {
@@ -1921,8 +2213,21 @@ void GrooveboxEditor::setupBar (juce::Slider& s, const juce::String& name, doubl
     s.updateText();
 }
 
+void GrooveboxEditor::setShowGroove (bool on)
+{
+    showGroove = on;
+    if (on && ! editorExpanded)
+    {
+        editorExpanded = true;
+        editorBtn.setToggleState (true, juce::dontSendNotification);
+    }
+    grooveView.refresh();
+    resized();
+}
+
 void GrooveboxEditor::selectLane (int li)
 {
+    if (showGroove) setShowGroove (false);
     if (li == view.selected) return;
     view.selected = li;
     laneEditor.setLane (li);
@@ -1986,21 +2291,18 @@ void GrooveboxEditor::syncRows()
     laneEditor.setLane (view.selected);
 
     genreBox.setSelectedId (proc.gen.genre + 1, juce::dontSendNotification);
-    barsBox.setSelectedId (proc.exportBars, juce::dontSendNotification);
     loopBox.setSelectedId (proc.gen.bars, juce::dontSendNotification);
     const int sl = proc.songBars <= 32 ? 32 : proc.songBars <= 64 ? 64 : proc.songBars <= 96 ? 96 : 128;
     songLenBox.setSelectedId (sl, juce::dontSendNotification);
     songBtn.setToggleState (proc.songMode.load(), juce::dontSendNotification);
-    pianoModeBtn.setToggleState (proc.pianoRollMode.load(), juce::dontSendNotification);
     bpmBox.setValue (juce::roundToInt (proc.previewBpm.load()), false);
     fitFilterBtn.setToggleState (proc.fitFilter, juce::dontSendNotification);
     density.setValue (proc.gen.density, juce::dontSendNotification);
     variation.setValue (proc.gen.variation, juce::dontSendNotification);
     irregular.setValue (proc.gen.irregular, juce::dontSendNotification);
     mutateAmt.setValue (proc.mutateAmount, juce::dontSendNotification);
-    grooveAmt.setValue (proc.grooveAmount, juce::dontSendNotification);
-    grooveBpmBox.setValue (juce::roundToInt (proc.grooveForcedBpm), false);
     grooveSlot.repaint();
+    grooveView.refresh();
     if (proc.grooveMessage.isNotEmpty())
     {
         status.setText (proc.grooveMessage, juce::dontSendNotification);
@@ -2008,7 +2310,7 @@ void GrooveboxEditor::syncRows()
         bpmBox.setValue (juce::roundToInt (proc.previewBpm.load()), false);
         swingScale.updateText();
     }
-    for (auto* s : { &density, &variation, &irregular, &mutateAmt, &grooveAmt })
+    for (auto* s : { &density, &variation, &irregular, &mutateAmt })
         s->updateText();
 
     timeline.repaint();
@@ -2055,7 +2357,7 @@ void GrooveboxEditor::timerCallback()
         r->tick();
     laneEditor.tick();
 
-    const int bar = proc.currentBar.load();
+    const int bar = proc.displayBar();
     if (bar != timeline.lastBar)
     {
         timeline.lastBar = bar;
@@ -2067,7 +2369,7 @@ void GrooveboxEditor::timerCallback()
         grooveReanalyzeIn = -1;
         if (proc.grooveFile.existsAsFile())
         {
-            proc.loadGroove (proc.grooveFile, (double) grooveBpmBox.getValue());
+            proc.loadGroove (proc.grooveFile, (double) grooveView.bpmBox.getValue());
             status.setText ("Listening to " + proc.grooveFile.getFileName() + " again...", juce::dontSendNotification);
         }
         grooveSlot.repaint();
@@ -2154,10 +2456,6 @@ void GrooveboxEditor::resized()
     songBtn.setBounds (row2.removeFromLeft (52)); row2.removeFromLeft (4);
     songLenBox.setBounds (row2.removeFromLeft (84)); row2.removeFromLeft (4);
     makeSongBtn.setBounds (row2.removeFromLeft (80)); row2.removeFromLeft (10);
-    barsBox.setBounds (row2.removeFromLeft (76)); row2.removeFromLeft (4);
-    dragMidiBtn.setBounds (row2.removeFromLeft (100)); row2.removeFromLeft (4);
-    pianoModeBtn.setBounds (row2.removeFromLeft (112)); row2.removeFromLeft (4);
-    saveMidiBtn.setBounds (row2.removeFromLeft (74));
     bpmLabel.setBounds (row2);
 
     auto row3 = r.removeFromTop (30).reduced (10, 4);
@@ -2165,9 +2463,7 @@ void GrooveboxEditor::resized()
     pageLabel.setBounds (row3.removeFromLeft (140)); row3.removeFromLeft (2);
     pageNext.setBounds (row3.removeFromLeft (24)); row3.removeFromLeft (4);
     followBtn.setBounds (row3.removeFromLeft (60)); row3.removeFromLeft (12);
-    grooveBpmBox.setBounds (row3.removeFromRight (78)); row3.removeFromRight (4);
-    grooveAmt.setBounds (row3.removeFromRight (120)); row3.removeFromRight (4);
-    grooveSlot.setBounds (row3.removeFromRight (330)); row3.removeFromRight (12);
+    grooveSlot.setBounds (row3.removeFromRight (420)); row3.removeFromRight (12);
     timeline.setBounds (row3);
 
     r.removeFromTop (18); // column captions
@@ -2177,9 +2473,14 @@ void GrooveboxEditor::resized()
     statusRow.removeFromRight (8);
     status.setBounds (statusRow);
 
-    laneEditor.setVisible (editorExpanded);
+    laneEditor.setVisible (editorExpanded && ! showGroove);
+    grooveView.setVisible (editorExpanded && showGroove);
     if (editorExpanded)
-        laneEditor.setBounds (r.removeFromBottom (300).reduced (8, 4));
+    {
+        const auto bottom = r.removeFromBottom (300).reduced (8, 4);
+        laneEditor.setBounds (bottom);
+        grooveView.setBounds (bottom);
+    }
 
     viewport.setBounds (r.reduced (8, 2));
     layoutLaneList();
