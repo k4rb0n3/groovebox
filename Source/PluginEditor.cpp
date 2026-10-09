@@ -1,5 +1,9 @@
 #include "PluginEditor.h"
 
+#ifndef JucePlugin_VersionString
+ #define JucePlugin_VersionString "dev"
+#endif
+
 using namespace cg;
 
 namespace
@@ -983,7 +987,7 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     title.setFont (juce::FontOptions (17.0f, juce::Font::bold));
     title.setColour (juce::Label::textColourId, kAccent);
     title.setBorderSize ({ 0, 0, 0, 0 });
-    byline.setText ("by PJH", juce::dontSendNotification);
+    byline.setText ("by PJH  v" JucePlugin_VersionString, juce::dontSendNotification);
     byline.setFont (juce::FontOptions (11.5f));
     byline.setColour (juce::Label::textColourId, kDim);
     byline.setBorderSize ({ 0, 0, 0, 0 });
@@ -1337,7 +1341,7 @@ void GrooveboxEditor::resized()
 
     auto row1 = r.removeFromTop (38).reduced (10, 6);
     title.setBounds (row1.removeFromLeft (102));
-    byline.setBounds (row1.removeFromLeft (52).withTrimmedTop (5));
+    byline.setBounds (row1.removeFromLeft (92).withTrimmedTop (5));
     setupsBtn.setBounds (row1.removeFromLeft (66)); row1.removeFromLeft (4);
     libraryBtn.setBounds (row1.removeFromLeft (86)); row1.removeFromLeft (4);
     shuffleBtn.setBounds (row1.removeFromLeft (118)); row1.removeFromLeft (4);
