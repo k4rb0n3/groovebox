@@ -19,40 +19,60 @@ struct GenreDef
     const char* name;
     float swing;
     float irregularBias;
+    double bpm;      // typical tempo, used for preview
+    float roll;      // chance of hat/perc rolls (ratchets), e.g. trap
     const char* pat[kNumRoles]; // nullptr = fallback
 };
 
 const GenreDef kGenres[] = {
-    { "House", 0.12f, 0.0f,
+    { "House", 0.12f, 0.0f, 124.0, 0.0f,
       { nullptr, nullptr, nullptr, "13x313x313x313x3", "00700070007000x0", nullptr, nullptr, "4646464646464646",
         "0030040000300400", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr } },
-    { "Deep House", 0.22f, 0.0f,
+    { "Deep House", 0.22f, 0.0f, 120.0, 0.0f,
       { nullptr, "0000300000003000", nullptr, "02x202x202x202x2", "0030003000300040", nullptr, nullptr, "3535353535353535",
         "0020030000200300", nullptr, "0004000200040002", nullptr, nullptr, nullptr, "00x000x000x0003x", nullptr } },
-    { "Tech House", 0.10f, 0.0f,
+    { "Tech House", 0.10f, 0.0f, 126.0, 0.0f,
       { nullptr, "0000000000000000", nullptr, "25x525x525x525x5", "00x000x000x000x0", nullptr, nullptr, nullptr,
         "0050060030050060", nullptr, "0300030003000304", nullptr, nullptr, nullptr, "0xx50xx50xx50xx5", nullptr } },
-    { "Minimal", 0.18f, 0.05f,
+    { "Minimal", 0.18f, 0.05f, 125.0, 0.0f,
       { nullptr, "0000000000000000", "0000500000005000", "02x302x302x302x3", "0000000000000040", nullptr, nullptr, "2323232323232323",
         "0030000200300002", nullptr, "0004000000030004", "2131213121312131", nullptr, nullptr, nullptr, nullptr } },
-    { "Techno", 0.03f, 0.0f,
+    { "Techno", 0.03f, 0.0f, 132.0, 0.0f,
       { nullptr, "0000000000000000", "0000400000004000", "57x757x757x757x7", "00x000x000x000x0", "30x030x030x030x0", nullptr, nullptr,
         "0040003000400030", "0000000000300040", nullptr, "1111111111111111", nullptr, nullptr, "0x500x500x500x50", nullptr } },
-    { "Dub Techno", 0.08f, 0.0f,
+    { "Dub Techno", 0.08f, 0.0f, 120.0, 0.0f,
       { nullptr, "0000000000000000", "0000300000003000", "03x303x303x303x3", "0000000000000030", "0050005000500060", nullptr, "2424242424242424",
         "0000020000000300", nullptr, "0000000300000002", nullptr, "x000000000000000", nullptr, "0x000x000x000x00", nullptr } },
-    { "Breaks", 0.08f, 0.05f,
+    { "Breaks", 0.08f, 0.05f, 130.0, 0.0f,
       { "x0x0000000xx0000", "0000x0030400x030", "0000300000003000", "x3x3x3x3x3x3x3x3", "0000000000000040", "5050505050505050", nullptr, nullptr,
         "0020030020030020", "0000000000000304", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr } },
-    { "UK Garage", 0.38f, 0.0f,
+    { "UK Garage", 0.38f, 0.0f, 132.0, 0.0f,
       { "x000000000x00300", nullptr, nullptr, "02x402x302x402x3", "0000000000000040", nullptr, nullptr, "4545454545454545",
         "0030003000300030", nullptr, "0004000300040003", nullptr, nullptr, nullptr, "x00000x000x00000", nullptr } },
-    { "IDM", 0.05f, 0.85f,
+    { "IDM", 0.05f, 0.85f, 120.0, 0.0f,
       { "x000003000x00000", "0000600000006003", "0000300000003000", "3535353535353535", "0000003000000030", "3030303030303030", nullptr, "3333333333333333",
         "0302030203020302", "0000200000002030", "0203020302030203", "3434343434343434", nullptr, nullptr, "x0003000x0000300", "0303030303030303" } },
-    { "Ambient", 0.10f, 0.25f,
+    { "Ambient", 0.10f, 0.25f, 90.0, 0.0f,
       { "6000000040000000", "0000000000000000", "0000000000002000", "0020002000200020", "0000000000000000", "0020000000200000", nullptr, "2020202020202020",
         "0010002000100020", "0000000000000000", "0000000000000000", "1010101010101010", "x000000000000000", "3000000000000000", "5000000000000000", nullptr } },
+    { "Drum & Bass", 0.03f, 0.0f, 174.0, 0.03f,
+      { "x000000000x00000", "0000x0000000x000", "0000300000003000", "x2x2x2x2x2x2x2x2", "0000000000000040", "5050505050505050", nullptr, "4444444444444444",
+        "0020002000200020", "0000000000000030", "0002000300020003", nullptr, nullptr, nullptr, "x000000000x00000", nullptr } },
+    { "Jungle", 0.06f, 0.1f, 165.0, 0.05f,
+      { "x0x0000000xx0000", "0000x0040400x030", "0000300000003000", "x3x3x3x3x3x3x3x3", "0000000000000040", "5050505050505050", nullptr, nullptr,
+        "0020030020030020", "0000000000000304", "0003000200030002", nullptr, nullptr, nullptr, "x000000000x00000", nullptr } },
+    { "Dubstep / Halftime", 0.05f, 0.0f, 140.0, 0.04f,
+      { "x000000000300000", "00000000x0000000", "00000000x0000000", "x3x3x3x3x3x3x3x3", "0000000000000030", "3030303030303030", nullptr, "2323232323232323",
+        "0003000000300003", "0000000000000030", "0000000300000003", nullptr, nullptr, nullptr, "x00000000x000000", nullptr } },
+    { "Trap", 0.0f, 0.0f, 140.0, 0.16f,
+      { "x000000x00x00000", "00000000x0000000", "00000000x0000000", "xxxxxxxxxxxxxxxx", "0000000000000300", nullptr, nullptr, nullptr,
+        "0000030000000300", "0000000000000020", "0004000000040000", nullptr, nullptr, nullptr, "x000000x00x00000", nullptr } },
+    { "Hip-hop / Boom bap", 0.5f, 0.0f, 90.0, 0.0f,
+      { "x0000003x0x00000", "0000x0000000x000", "0000x0000000x000", "x2x2x2x2x2x2x2x2", "0000000000000030", nullptr, nullptr, "3333333333333333",
+        "0020000000200000", nullptr, "0000000300000003", nullptr, nullptr, nullptr, "x00000x0x0000000", nullptr } },
+    { "Downtempo", 0.3f, 0.1f, 100.0, 0.0f,
+      { "x000000040x00000", "0000x0000000x000", "0000300000003000", "02x202x202x202x2", "0000000000000030", "0030003000300030", nullptr, "2424242424242424",
+        "0010002000100020", "0000000000000020", "0000000200000002", nullptr, "x000000000000000", nullptr, "x000000030000000", nullptr } },
 };
 
 constexpr int kNumTemplateGenres = (int) (sizeof (kGenres) / sizeof (kGenres[0]));
@@ -104,6 +124,12 @@ float swingFor (Role r, float genreSwing)
     }
 }
 } // namespace
+
+double genreBpm (int g)
+{
+    if (g >= 0 && g < kNumTemplateGenres) return kGenres[g].bpm;
+    return 124.0;
+}
 
 const char* genreName (int g)
 {
@@ -212,13 +238,14 @@ void generateLane (Lane& lane, const GenSettings& s, juce::Random& rng)
     }
 
     // Straight lane: 16 steps (or 4 bars for long sounds) at 1/16.
+    const int targetLen = juce::jlimit (16, kMaxSteps, s.bars * 16);
     lane.rate   = kRate16;
-    lane.length = longRole ? 64 : 16;
+    lane.length = longRole ? juce::jmax (64, targetLen) : 16;
 
     for (int i = 0; i < lane.length; ++i)
     {
         float p;
-        if (longRole) p = i == 0 ? tpl[0] : (i == 32 ? tpl[0] * 0.4f : 0.0f);
+        if (longRole) p = i % 64 == 0 ? tpl[0] : (i % 64 == 32 ? tpl[0] * 0.4f : 0.0f);
         else          p = tpl[(size_t) i];
 
         auto& st = lane.steps[(size_t) i];
@@ -251,8 +278,8 @@ void generateLane (Lane& lane, const GenSettings& s, juce::Random& rng)
         if (st.on && p < 0.999f && rng.nextFloat() < var * 0.25f)
             st.nudge = juce::jlimit (-0.5f, 0.5f, st.nudge + (rng.nextFloat() - 0.5f) * var * 0.12f);
 
-        if (st.on && ghostRole && rng.nextFloat() < var * 0.05f)
-            st.ratchet = rng.nextFloat() < 0.3f ? 3 : 2;
+        if (st.on && ghostRole && rng.nextFloat() < var * 0.05f + (freeMode ? 0.0f : def.roll))
+            st.ratchet = def.roll > 0.1f ? 2 + rng.nextInt (3) : (rng.nextFloat() < 0.3f ? 3 : 2);
     }
 
     // With more variation, hats and percussion get a 2-bar phrase whose second bar differs slightly.
@@ -271,14 +298,50 @@ void generateLane (Lane& lane, const GenSettings& s, juce::Random& rng)
             lane.steps[(size_t) i] = tmp.steps[(size_t) i];
         lane.length = 32;
     }
+
+    // Longer loops: repeat the phrase and let it evolve bar by bar, with fills every 4 and 8 bars.
+    if (! longRole && targetLen > lane.length)
+    {
+        const int base = lane.length;
+        for (int i = base; i < targetLen; ++i)
+            lane.steps[(size_t) i] = lane.steps[(size_t) (i % base)];
+        lane.length = targetLen;
+
+        const float evolve = (role == Role::Kick || role == Role::Bass ? 0.06f : 0.22f) * var;
+        if (evolve > 0.0f)
+            for (int bar = base / 16; bar < targetLen / 16; ++bar)
+                mutateRange (lane, bar * 16, bar * 16 + 16, evolve, rng);
+
+        const bool fillRole = role == Role::Snare || role == Role::Clap || role == Role::ClosedHat
+                           || role == Role::Tom || role == Role::Perc || role == Role::Rim;
+        if (fillRole && var > 0.15f)
+            for (int bar = 3; bar < targetLen / 16; bar += 4)
+            {
+                const float strength = (bar % 8 == 7) ? 1.0f : 0.5f;
+                for (int i = bar * 16 + 12; i < bar * 16 + 16; ++i)
+                {
+                    if (rng.nextFloat() >= var * 0.6f * strength) continue;
+                    auto& st = lane.steps[(size_t) i];
+                    if (! st.on)
+                    {
+                        st = Step {};
+                        st.on = true;
+                        st.vel = 0.35f + rng.nextFloat() * 0.4f;
+                    }
+                    if (rng.nextFloat() < 0.3f * strength)
+                        st.ratchet = 2 + rng.nextInt (2);
+                }
+            }
+    }
 }
 
-void mutateLane (Lane& lane, float amount, juce::Random& rng)
+void mutateRange (Lane& lane, int from, int to, float amount, juce::Random& rng)
 {
     amount = juce::jlimit (0.0f, 1.0f, amount);
-    const int len = juce::jlimit (1, kMaxSteps, lane.length);
+    from = juce::jlimit (0, kMaxSteps, from);
+    to = juce::jlimit (from, kMaxSteps, to);
 
-    for (int i = 0; i < len; ++i)
+    for (int i = from; i < to; ++i)
     {
         auto& st = lane.steps[(size_t) i];
 
@@ -301,22 +364,28 @@ void mutateLane (Lane& lane, float amount, juce::Random& rng)
         }
         else if (rng.nextFloat() < amount * 0.12f)
         {
+            st = Step {};
             st.on    = true;
             st.vel   = 0.2f + rng.nextFloat() * 0.4f;
             st.prob  = 0.6f + rng.nextFloat() * 0.4f;
-            st.nudge = 0.0f;
-            st.ratchet = 1;
         }
     }
 
     // Occasionally swap neighbours to shift accents.
-    for (int i = 0; i + 1 < len; ++i)
+    for (int i = from; i + 1 < to; ++i)
         if (rng.nextFloat() < amount * 0.05f)
             std::swap (lane.steps[(size_t) i], lane.steps[(size_t) i + 1]);
+}
 
-    // Rarely nudge the lane length itself, for slow polymeter drift.
-    if (amount > 0.5f && rng.nextFloat() < (amount - 0.5f) * 0.3f)
-        lane.length = juce::jlimit (1, kMaxSteps, len + (rng.nextBool() ? 1 : -1));
+void mutateLane (Lane& lane, float amount, juce::Random& rng)
+{
+    amount = juce::jlimit (0.0f, 1.0f, amount);
+    const int len = juce::jlimit (1, kMaxSteps, lane.length);
+    mutateRange (lane, 0, len, amount, rng);
+
+    // Rarely nudge the lane length itself, for slow polymeter drift (short lanes only).
+    if (len <= kViewSteps && amount > 0.5f && rng.nextFloat() < (amount - 0.5f) * 0.3f)
+        lane.length = juce::jlimit (1, kViewSteps, len + (rng.nextBool() ? 1 : -1));
 }
 
 Role guessRole (const juce::String& nameIn)

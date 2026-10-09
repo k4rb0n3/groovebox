@@ -70,6 +70,21 @@ public:
 
     std::atomic<int> modelVersion { 0 };
 
+    //== Song mode: a full-track arrangement over the lanes ===========================
+    struct Section { juce::String name; int startBar = 0, bars = 0; int type = 0; };
+    std::atomic<bool> songMode { false };
+    int songBars = 64;
+    std::vector<Section> songSections;
+    std::array<juce::uint32, 512> songMask {}; // bit per lane: does the lane play in this bar
+    std::atomic<int> currentBar { -1 };
+    void makeSong (int bars);
+    bool laneActiveAtBar (int lane, int bar) const
+    {
+        return bar >= 0 && bar < juce::jmin (songBars, (int) songMask.size()) && ((songMask[(size_t) bar] >> lane) & 1u) != 0;
+    }
+
+    std::atomic<double> previewBpm { 124.0 }; // tempo for the Play button when FL isn't playing
+
     // Automatable per-lane parameters.
     static juce::String paramId (int lane, const char* what) { return "l" + juce::String (lane + 1) + "_" + what; }
     static float cutoffHz (float norm) { return 20.0f * std::pow (1000.0f, juce::jlimit (0.0f, 1.0f, norm)); }

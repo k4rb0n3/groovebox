@@ -88,6 +88,7 @@ GrooveboxProcessor::GrooveboxProcessor()
     }
 
     midiOut.ensureSize (8192);
+    songMask.fill (0xffffffffu);
     seed = (juce::uint32) juce::Random::getSystemRandom().nextInt();
     initDefaultLanes();
     generateAll();
@@ -278,7 +279,6 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             if (auto p = pos->getPpqPosition()) ppq = *p;
         }
     bpm = juce::jlimit (20.0, 999.0, bpm);
-    lastBpm = bpm;
 
     const bool preview = previewPlaying.load();
     const bool seqOn = apvts.getRawParameterValue ("seq")->load() > 0.5f;
@@ -286,12 +286,15 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
     if (! hostPlaying)
     {
-        if (preview) ppq = internalPpq;
+        if (preview) { ppq = internalPpq; bpm = juce::jlimit (40.0, 300.0, previewBpm.load()); }
         else         internalPpq = 0.0;
     }
 
+    lastBpm = bpm;
     const double beatsPerSample = bpm / 60.0 / sr;
     const double ppqEnd = ppq + (double) n * beatsPerSample;
+    const bool song = songMode.load();
+    currentBar = running ? (int) std::floor (ppq / 4.0) : -1;
 
     // A jump backwards means the host looped: change the random salt so probabilities re-roll each pass.
     if (ppq < lastPpqEnd - 1.0e-6)
@@ -361,6 +364,8 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             collectEvents (lane, li, passSeed, ppq, ppqEnd, bpm, swingScale, humScale,
                            [&] (double t, float v, const Step& st)
                            {
+                               if (song && ! laneActiveAtBar (li, (int) std::floor (t / 4.0)))
+                                   return; // this lane rests in this part of the song
                                const int off = juce::jlimit (0, n - 1, (int) ((t - ppq) / beatsPerSample));
                                fire (li, v, off, st, sb);
                            });
@@ -878,6 +883,84 @@ void GrooveboxProcessor::mutateOneLane (int li)
     ++modelVersion;
 }
 
+void GrooveboxProcessor::makeSong (int bars)
+{
+    enum Type { Intro, Build, Main, Break, Outro };
+    static const char* names[] = { "Intro", "Build", "Main", "Break", "Outro" };
+
+    bars = juce::jlimit (16, 256, bars);
+    std::vector<std::pair<int, int>> plan; // (type, bars)
+    if (bars <= 32)       plan = { { Intro, 4 }, { Build, 4 }, { Main, 8 }, { Break, 4 }, { Main, 8 }, { Outro, 4 } };
+    else if (bars <= 64)  plan = { { Intro, 8 }, { Build, 8 }, { Main, 16 }, { Break, 8 }, { Main, 16 }, { Outro, 8 } };
+    else if (bars <= 96)  plan = { { Intro, 16 }, { Build, 8 }, { Main, 24 }, { Break, 16 }, { Build, 8 }, { Main, 16 }, { Outro, 8 } };
+    else                  plan = { { Intro, 16 }, { Build, 16 }, { Main, 32 }, { Break, 16 }, { Build, 8 }, { Main, 24 }, { Outro, 16 } };
+
+    int total = 0;
+    for (auto& p : plan) total += p.second;
+    if (bars != total) // stretch the main sections to fit other lengths
+        for (auto& p : plan)
+            if (p.first == Main) { p.second = juce::jmax (4, p.second + (bars - total) / 2); }
+    total = 0;
+    for (auto& p : plan) total += p.second;
+
+    // Which roles play in which kind of section (chance per lane, decided once per section).
+    auto chance = [] (Role r, int type) -> float
+    {
+        switch (type)
+        {
+            case Intro:
+                switch (r) { case Role::Kick: case Role::ClosedHat: case Role::Click: case Role::Texture: return 1.0f;
+                             case Role::Perc: case Role::Rim: case Role::Shaker: return 0.5f; default: return 0.0f; }
+            case Build:
+                switch (r) { case Role::Texture: case Role::OpenHat: case Role::Ride: case Role::Bass: return 0.5f;
+                             case Role::Snare: case Role::Clap: return 0.6f; case Role::Tom: return 0.3f; case Role::Cymbal: return 0.0f;
+                             default: return 1.0f; }
+            case Main:
+                return r == Role::Texture ? 0.5f : 1.0f;
+            case Break:
+                switch (r) { case Role::Kick: case Role::Bass: case Role::Snare: return 0.0f;
+                             case Role::Texture: case Role::FX: case Role::Ride: case Role::Cymbal: return 1.0f;
+                             case Role::ClosedHat: case Role::OpenHat: return 0.4f; case Role::Clap: return 0.3f; default: return 0.5f; }
+            case Outro:
+                switch (r) { case Role::Kick: case Role::ClosedHat: case Role::Texture: return 1.0f;
+                             case Role::Perc: case Role::Rim: return 0.5f; default: return 0.0f; }
+            default: return 1.0f;
+        }
+    };
+
+    std::array<juce::uint32, 512> mask {};
+    std::vector<Section> sections;
+    const int nl = numLanes;
+    int bar = 0;
+    for (auto [type, len] : plan)
+    {
+        juce::uint32 m = 0;
+        for (int li = 0; li < nl; ++li)
+            if (rng.nextFloat() < chance (lanes[(size_t) li].role, type)) m |= (1u << li);
+        if (m == 0 && nl > 0) m = 1u; // never a fully silent section
+
+        for (int b = bar; b < bar + len && b < (int) mask.size(); ++b)
+            mask[(size_t) b] = m;
+
+        // Tension: kick and bass drop out for the last bar of a build.
+        if (type == Build && len >= 4)
+            for (int li = 0; li < nl; ++li)
+                if (lanes[(size_t) li].role == Role::Kick || lanes[(size_t) li].role == Role::Bass)
+                    mask[(size_t) (bar + len - 1)] &= ~(1u << li);
+
+        sections.push_back ({ names[type], bar, len, type });
+        bar += len;
+    }
+
+    {
+        const juce::SpinLock::ScopedLockType sl (lock);
+        songMask = mask;
+        songBars = total;
+    }
+    songSections = sections;
+    ++modelVersion;
+}
+
 void GrooveboxProcessor::copyLaneParams (int from, int to)
 {
     for (auto* what : { "level", "pan", "pitch", "cutoff" })
@@ -903,6 +986,7 @@ void GrooveboxProcessor::addLane()
         lanes[(size_t) nl] = Lane {};
         lanes[(size_t) nl].role = Role::Perc;
         lanes[(size_t) nl].name = "Lane " + juce::String (nl + 1);
+        for (auto& m : songMask) m |= (1u << nl); // a new lane plays throughout the song
         numLanes = nl + 1;
     }
     ++modelVersion;
@@ -923,6 +1007,8 @@ void GrooveboxProcessor::removeLane (int li)
             lanes[(size_t) j] = std::move (lanes[(size_t) j + 1]);
         lanes[(size_t) nl - 1] = Lane {};
         numLanes = nl - 1;
+        const juce::uint32 below = (1u << li) - 1u;
+        for (auto& m : songMask) m = (m & below) | ((m >> 1) & ~below);
     }
 
     for (auto& t : laneToken) ++t; // pending folder scans refer to old lane positions
@@ -953,7 +1039,8 @@ juce::File GrooveboxProcessor::exportMidi()
     std::vector<Ev> events;
     events.reserve (4096);
 
-    const double total = juce::jlimit (1, 64, exportBars) * 4.0;
+    const bool song = songMode.load();
+    const double total = (song ? songBars : juce::jlimit (1, 64, exportBars)) * 4.0;
     const float swingScale = apvts.getRawParameterValue ("swing")->load();
     const float humScale   = apvts.getRawParameterValue ("humanize")->load();
 
@@ -969,6 +1056,17 @@ juce::File GrooveboxProcessor::exportMidi()
             if (lane.mute || (anySolo && ! lane.solo)) continue;
             // Every step exactly once, wrapped into the clip, so the MIDI loops seamlessly
             // (a step nudged early at the clip start lands at the clip end).
+            if (song)
+            {
+                // A song is not a loop: export it as it plays.
+                collectEvents (lane, li, seed, 0.0, total, lastBpm.load(), swingScale, humScale,
+                               [&] (double t, float v, const Step&)
+                               {
+                                   if (laneActiveAtBar (li, (int) std::floor (t / 4.0)))
+                                       events.push_back ({ t, v, kBaseNote + li });
+                               });
+                continue;
+            }
             const auto clipSteps = (juce::int64) std::ceil (total / lane.stepBeats() - 1.0e-9);
             collectEvents (lane, li, seed, 0.0, total, lastBpm.load(), swingScale, humScale,
                            [&] (double t, float v, const Step&)
@@ -997,8 +1095,8 @@ juce::File GrooveboxProcessor::exportMidi()
     mf.addTrack (seq);
 
     auto name = juce::String ("Groovebox ") + juce::String (genreName (gen.genre)).upToFirstOccurrenceOf (" (", false, false)
-              + " " + juce::String (exportBars) + " bars " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S") + ".mid";
-    auto file = exportFolder().getChildFile (juce::File::createLegalFileName (name));
+              + (song ? " song " + juce::String (songBars) : " " + juce::String (exportBars)) + " bars " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H%M%S") + ".mid";
+    auto file = exportFolder().getChildFile (juce::File::createLegalFileName (name).replaceCharacter ('/', '-'));
 
     file.deleteFile();
     juce::FileOutputStream out (file);
@@ -1058,7 +1156,7 @@ std::unique_ptr<juce::XmlElement> GrooveboxProcessor::createStateXml()
 {
     auto xmlPtr = std::make_unique<juce::XmlElement> ("Groovebox");
     auto& xml = *xmlPtr;
-    xml.setAttribute ("version", 2);
+    xml.setAttribute ("version", 3);
     if (auto params = apvts.copyState().createXml())
         xml.addChildElement (params.release());
 
@@ -1071,6 +1169,19 @@ std::unique_ptr<juce::XmlElement> GrooveboxProcessor::createStateXml()
     xml.setAttribute ("library", libraryRoot.getFullPathName());
     xml.setAttribute ("exportBars", exportBars);
     xml.setAttribute ("fitFilter", fitFilter);
+    xml.setAttribute ("bars", gen.bars);
+    xml.setAttribute ("previewBpm", previewBpm.load());
+    xml.setAttribute ("songMode", songMode.load());
+    xml.setAttribute ("songBars", songBars);
+    {
+        juce::String sec, masks;
+        for (const auto& sc : songSections)
+            sec << sc.name << ':' << sc.startBar << ':' << sc.bars << ':' << sc.type << ';';
+        for (int b = 0; b < songBars && b < (int) songMask.size(); ++b)
+            masks << juce::String::toHexString ((juce::int64) songMask[(size_t) b]) << ',';
+        xml.setAttribute ("songSections", sec);
+        xml.setAttribute ("songMask", masks);
+    }
 
     const juce::SpinLock::ScopedLockType sl (lock);
     xml.setAttribute ("numLanes", numLanes.load());
@@ -1130,7 +1241,31 @@ void GrooveboxProcessor::applyStateXml (const juce::XmlElement& xmlRef)
     if (auto* params = xml->getChildByName (apvts.state.getType()))
         apvts.replaceState (juce::ValueTree::fromXml (*params));
 
-    gen.genre     = juce::jlimit (0, (int) NumGenres - 1, xml->getIntAttribute ("genre", gen.genre));
+    int genre = xml->getIntAttribute ("genre", gen.genre);
+    if (xml->getIntAttribute ("version", 1) < 3 && genre >= 10)
+        genre += 6; // Hybrid and Free moved when six genres were added in 0.3
+    gen.genre     = juce::jlimit (0, (int) NumGenres - 1, genre);
+    gen.bars      = juce::jlimit (1, 64, xml->getIntAttribute ("bars", 1));
+    previewBpm    = juce::jlimit (40.0, 300.0, xml->getDoubleAttribute ("previewBpm", genreBpm (gen.genre)));
+    songMode      = xml->getBoolAttribute ("songMode", false);
+    songSections.clear();
+    {
+        juce::StringArray items;
+        items.addTokens (xml->getStringAttribute ("songSections"), ";", "");
+        for (const auto& it : items)
+        {
+            juce::StringArray f;
+            f.addTokens (it, ":", "");
+            if (f.size() >= 4) songSections.push_back ({ f[0], f[1].getIntValue(), f[2].getIntValue(), f[3].getIntValue() });
+        }
+        juce::StringArray masks;
+        masks.addTokens (xml->getStringAttribute ("songMask"), ",", "");
+        const juce::SpinLock::ScopedLockType sl (lock);
+        songBars = juce::jlimit (16, 256, xml->getIntAttribute ("songBars", 64));
+        songMask.fill (0xffffffffu);
+        for (int b = 0; b < masks.size() && b < (int) songMask.size(); ++b)
+            songMask[(size_t) b] = (juce::uint32) masks[b].getHexValue64();
+    }
     gen.density   = (float) xml->getDoubleAttribute ("density", gen.density);
     gen.variation = (float) xml->getDoubleAttribute ("variation", gen.variation);
     gen.irregular = (float) xml->getDoubleAttribute ("irregular", gen.irregular);
@@ -1169,7 +1304,7 @@ void GrooveboxProcessor::applyStateXml (const juce::XmlElement& xmlRef)
             l.reso        = (float) e->getDoubleAttribute ("reso", 0.2);
             l.filter      = (FilterType) juce::jlimit (0, 3, e->getIntAttribute ("filter", 0));
             l.reverse     = e->getBoolAttribute ("reverse");
-            l.mode        = (LaneMode) juce::jlimit (0, 1, e->getIntAttribute ("mode", 0));
+            l.mode        = LaneMode::Sample; // the FL-channel MIDI mode was retired in 0.3 (FL ignores VST3 MIDI out)
             l.midiChannel = juce::jlimit (1, 16, e->getIntAttribute ("midiCh", 1));
             l.midiNote    = juce::jlimit (0, 127, e->getIntAttribute ("midiNote", 60));
             l.lockSample  = e->getBoolAttribute ("lockSample");

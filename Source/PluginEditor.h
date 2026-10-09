@@ -4,7 +4,13 @@
 
 namespace cg
 {
-enum class EditMode { Steps, Velocity, Probability, Nudge, Ratchet, Pitch, Pan, Cutoff, Start };
+// Shared view state: which lane is selected, which page of long lanes is shown.
+struct ViewState
+{
+    int selected = 0;
+    int page = 0;
+    bool follow = true;
+};
 
 class Look : public juce::LookAndFeel_V4
 {
@@ -26,26 +32,61 @@ public:
     void paintButton (juce::Graphics&, bool over, bool down) override;
 };
 
+// Step on/off row (velocity shown as bar height). Used small in each lane and large in the lane editor.
 class StepGrid : public juce::Component
 {
 public:
-    StepGrid (GrooveboxProcessor& p, const EditMode& mode) : proc (p), editMode (mode) {}
+    StepGrid (GrooveboxProcessor& p, const ViewState& v) : proc (p), view (v) {}
     void setLane (int li) { lane = li; repaint(); }
+    void setLabel (const juce::String& l, int width) { label = l; labelW = width; repaint(); }
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     int lastDrawnPlayStep = -2;
-    std::function<void()> onTouched;
+    std::function<void()> onTouched, onEdited;
 
 private:
     GrooveboxProcessor& proc;
-    const EditMode& editMode;
+    const ViewState& view;
     int lane = 0;
     bool paintState = true;
     int lastIdx = -1;
+    juce::String label;
+    int labelW = 0;
+
+    int stepAt (float x) const; // absolute step index, -1 outside
+    void applyAt (const juce::MouseEvent&, bool isDown);
+    void showMenu();
+};
+
+// One editable row of step values (velocity, pitch, pan...) in the lane editor.
+enum class Param { Velocity, Probability, Pitch, Pan, Cutoff, Start, Nudge, Ratchet, Count };
+
+class ParamStrip : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    ParamStrip (GrooveboxProcessor& p, const ViewState& v, Param prm);
+    void setLane (int li) { lane = li; repaint(); }
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    static constexpr int kLabelW = 86;
+    std::function<void()> onEdited;
+
+private:
+    GrooveboxProcessor& proc;
+    const ViewState& view;
+    Param param;
+    int lane = 0, lastIdx = -1;
+    float lastV = 0.0f;
 
     int stepAt (float x) const;
-    void applyAt (const juce::MouseEvent&, bool isDown);
+    float valueFromY (float y) const;
+    void setFrom01 (Step&, float v) const;
+    float get01 (const Step&) const;
+    bool bipolar() const { return param == Param::Pitch || param == Param::Pan || param == Param::Nudge; }
+    juce::String text (const Step&) const;
     void showMenu();
 };
 
@@ -58,17 +99,19 @@ public:
     int getValue() const { return value; }
     std::function<void (int)> onChange;
     std::function<juce::String (int)> format;
+    std::function<int (int value, int direction)> stepper; // custom increments (e.g. whole bars)
     juce::Colour accent { 0xfff0b44c };
 
     void paint (juce::Graphics&) override;
-    void mouseDown (const juce::MouseEvent&) override { dragStart = value; }
-    void mouseDrag (const juce::MouseEvent& e) override { setValue (dragStart - e.getDistanceFromDragStartY() / 6, true); }
+    void mouseDown (const juce::MouseEvent&) override { dragStart = value; dragSteps = 0; }
+    void mouseDrag (const juce::MouseEvent& e) override;
     void mouseDoubleClick (const juce::MouseEvent&) override { setValue (def, true); }
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
 private:
-    int lo, hi, def, value, dragStart = 0;
+    int lo, hi, def, value, dragStart = 0, dragSteps = 0;
     float wheelAcc = 0.0f;
+    int stepFrom (int v, int dir) const { return stepper ? stepper (v, dir) : v + dir; }
 };
 
 class SampleSlot : public juce::Component, public juce::FileDragAndDropTarget, public juce::TooltipClient
@@ -96,25 +139,29 @@ private:
 class LaneRow : public juce::Component
 {
 public:
-    LaneRow (GrooveboxProcessor& p, const EditMode& mode, const int& selectedLane);
+    LaneRow (GrooveboxProcessor& p, ViewState& v);
     void setLane (int li);
     int getLane() const { return lane; }
     void refresh();
     void resized() override;
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void tick(); // called by the editor timer
     void repaintSlot() { slot.repaint(); }
+    void repaintGrid() { grid.repaint(); }
 
     std::function<void (int)> onSelect;
+    std::function<void()> onEdited;
     std::vector<std::pair<juce::String, juce::Rectangle<int>>> captions() const;
 
     static constexpr int kHeight = 40;
 
 private:
     GrooveboxProcessor& proc;
-    const int& selected;
+    ViewState& view;
     int lane = 0;
+    bool resting = false; // song mode: this lane sits out the current section
 
     juce::TextButton muteBtn { "M" }, soloBtn { "S" }, prevBtn { "<" }, nextBtn { ">" },
                      randBtn { "?" }, folderBtn { "..." }, genBtn { "Gen" }, mutBtn { "Mut" }, removeBtn { "x" };
@@ -135,27 +182,57 @@ private:
     template <typename Fn> void edit (Fn&& fn);
 };
 
-// Settings for the selected lane: how it plays, filter, envelope, routing.
-class LaneDetail : public juce::Component
+// Bottom panel: the selected lane's sequence, big, with a row per step parameter, plus lane settings.
+class LaneEditor : public juce::Component
 {
 public:
-    explicit LaneDetail (GrooveboxProcessor& p);
+    LaneEditor (GrooveboxProcessor& p, ViewState& v);
     void setLane (int li);
     void refresh();
     void resized() override;
     void paint (juce::Graphics&) override;
+    void tick();
+    std::function<void()> onEdited;
 
 private:
     GrooveboxProcessor& proc;
+    ViewState& view;
     int lane = 0;
 
-    juce::Label title, fitLabel;
-    juce::ComboBox modeBox, midiChBox, filterBox, outBox, chokeBox;
-    NumberBox noteBox { 0, 127, 60 };
+    juce::Label title, fitLabel, hint;
+    juce::ComboBox filterBox, outBox, chokeBox;
     juce::Slider reso, attack;
     juce::TextButton reverseBtn { "Reverse" };
+    StepGrid steps;
+    std::vector<std::unique_ptr<ParamStrip>> strips;
 
     template <typename Fn> void edit (Fn&& fn);
+};
+
+// Song arrangement strip with the playhead.
+class SongTimeline : public juce::Component
+{
+public:
+    explicit SongTimeline (GrooveboxProcessor& p) : proc (p) {}
+    void paint (juce::Graphics&) override;
+    int lastBar = -2;
+
+private:
+    GrooveboxProcessor& proc;
+};
+
+// Full-window help screen.
+class HelpOverlay : public juce::Component
+{
+public:
+    HelpOverlay();
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseDown (const juce::MouseEvent&) override { setVisible (false); }
+
+private:
+    juce::TextEditor text;
+    juce::TextButton closeBtn { "Close" };
 };
 
 class MidiDragButton : public juce::TextButton
@@ -185,16 +262,18 @@ public:
 private:
     GrooveboxProcessor& proc;
     cg::Look look;
-    cg::EditMode editMode = cg::EditMode::Steps;
-    int selectedLane = 0;
+    cg::ViewState view;
 
-    juce::Label title, byline, status, bpmLabel;
-    juce::TextButton setupsBtn { "Setups" }, libraryBtn { "Library..." }, shuffleBtn { "Shuffle samples" }, fitFilterBtn { "Fit filter" },
-                     generateBtn { "Generate" }, mutateBtn { "Mutate" }, previewBtn { "Play" },
-                     seqBtn { "Sequencer" }, saveMidiBtn { "Save MIDI" }, addLaneBtn { "+ Add lane" };
+    juce::Label title, byline, status, bpmLabel, pageLabel;
+    juce::TextButton helpBtn { "Help" }, setupsBtn { "Setups" }, libraryBtn { "Library..." }, shuffleBtn { "Shuffle samples" },
+                     fitFilterBtn { "Fit filter" }, generateBtn { "Generate" }, mutateBtn { "Mutate" }, previewBtn { "Play" },
+                     seqBtn { "Sequencer" }, saveMidiBtn { "Save MIDI" }, addLaneBtn { "+ Add lane" },
+                     songBtn { "Song" }, makeSongBtn { "Make song" }, pagePrev { "<" }, pageNext { ">" }, followBtn { "Follow" },
+                     editorBtn { "Lane editor" };
     cg::MidiDragButton dragMidiBtn;
-    juce::ComboBox genreBox, modeBox, barsBox;
+    juce::ComboBox genreBox, barsBox, loopBox, songLenBox;
     juce::Slider density, variation, irregular, mutateAmt, swingScale, humScale, master;
+    cg::NumberBox bpmBox { 40, 300, 124 };
 
     using SliderAtt = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
@@ -204,15 +283,21 @@ private:
     juce::Viewport viewport;
     juce::Component laneList;
     std::vector<std::unique_ptr<cg::LaneRow>> rows;
-    cg::LaneDetail detail;
+    cg::LaneEditor laneEditor;
+    cg::SongTimeline timeline;
+    cg::HelpOverlay help;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::TooltipWindow tooltips { this, 500 };
+    bool editorExpanded = true;
 
     int seenVersion = -1, seenAnalysis = -1, tickCount = 0;
 
     void syncRows();
     void layoutLaneList();
     void selectLane (int li);
+    void setPage (int p);
+    void updatePageLabel();
+    void repaintGrids();
     void showSetupsMenu();
     void setupBar (juce::Slider&, const juce::String& name, double def, std::function<void (float)> setter);
     void timerCallback() override;

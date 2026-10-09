@@ -196,9 +196,9 @@ Family familyOf (int genre)
 {
     switch (genre)
     {
-        case Techno:                                  return Family::Techno;
+        case Techno: case Halftime: case Trap:        return Family::Techno; // long, heavy kicks
         case DeepHouse: case DubTechno: case Minimal:
-        case Ambient:                                 return Family::Deep;
+        case Ambient: case HipHop: case Downtempo:    return Family::Deep;
         case IDM: case Free: case Hybrid:             return Family::Experimental;
         default:                                      return Family::Club;
     }

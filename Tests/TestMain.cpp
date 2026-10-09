@@ -299,11 +299,120 @@ int main (int argc, char** argv)
         GrooveboxProcessor::lastSessionFile().deleteFile();
     }
 
+    // 15. Long loops evolve bar by bar
+    {
+        for (int i = 0; i < p.numLanes; ++i) { p.lanes[(size_t) i].lockPattern = false; p.lanes[(size_t) i].mute = false; }
+        p.gen.genre = cg::House; p.gen.irregular = 0.0f; p.gen.variation = 0.5f; p.gen.bars = 16;
+        p.generateAll();
+        int hatLane = -1;
+        for (int i = 0; i < p.numLanes; ++i) if (p.lanes[(size_t) i].role == cg::Role::ClosedHat) { hatLane = i; break; }
+        const auto& hl = p.lanes[(size_t) juce::jmax (0, hatLane)];
+        int differentBars = 0;
+        for (int b = 1; b < 16; ++b)
+        {
+            bool same = true;
+            for (int s2 = 0; s2 < 16; ++s2)
+                same = same && hl.steps[(size_t) (b * 16 + s2)].on == hl.steps[(size_t) s2].on
+                            && std::abs (hl.steps[(size_t) (b * 16 + s2)].vel - hl.steps[(size_t) s2].vel) < 0.01f;
+            if (! same) ++differentBars;
+        }
+        CHECK (hl.length == 256, "16-bar loop gives a 256-step hat lane (" + juce::String (hl.length) + ")");
+        CHECK (differentBars >= 5, "hat bars evolve across the loop (" + juce::String (differentBars) + " of 15 bars differ from bar 1)");
+        juce::AudioBuffer<float> a;
+        CHECK (render (p, head, 2.0, &a) > 0.01f, "long lanes render");
+        p.gen.bars = 1;
+    }
+
+    // 16. New genres
+    {
+        p.lanes[0].role = cg::Role::Kick; // lane 1 was removed earlier; make sure there is a kick lane
+        p.gen.variation = 0.0f;
+        p.gen.genre = cg::DrumAndBass;
+        p.generateAll();
+        int kick = -1;
+        for (int i = 0; i < p.numLanes; ++i) if (p.lanes[(size_t) i].role == cg::Role::Kick) { kick = i; break; }
+        CHECK (kick >= 0 && laneString (p.lanes[(size_t) kick]) == "X.........X.....", "drum & bass two-step kick: "
+               + (kick >= 0 ? laneString (p.lanes[(size_t) kick]) : juce::String ("no kick lane")));
+        CHECK (cg::genreBpm (cg::DrumAndBass) > 160.0 && cg::genreBpm (cg::HipHop) < 100.0, "genres carry their tempo (DnB 174, hip-hop 90)");
+        p.gen.genre = cg::Trap; p.gen.variation = 0.4f;
+        p.generateAll();
+        int rolls = 0;
+        for (int i = 0; i < p.numLanes; ++i)
+            if (p.lanes[(size_t) i].role == cg::Role::ClosedHat)
+                for (int s2 = 0; s2 < p.lanes[(size_t) i].length; ++s2) if (p.lanes[(size_t) i].steps[(size_t) s2].ratchet > 1) ++rolls;
+        CHECK (rolls >= 1, "trap hats get rolls (" + juce::String (rolls) + " ratcheted steps)");
+    }
+
+    // 17. Song mode
+    {
+        p.gen.genre = cg::Techno; p.gen.variation = 0.3f;
+        p.generateAll();
+        p.makeSong (64);
+        int kick = -1;
+        for (int i = 0; i < p.numLanes; ++i) if (p.lanes[(size_t) i].role == cg::Role::Kick) { kick = i; break; }
+        int breakStart = -1, buildEnd = -1, mainStart = -1;
+        for (const auto& sc : p.songSections)
+        {
+            if (sc.name == "Break" && breakStart < 0) breakStart = sc.startBar;
+            if (sc.name == "Build" && buildEnd < 0) buildEnd = sc.startBar + sc.bars - 1;
+            if (sc.name == "Main" && mainStart < 0) mainStart = sc.startBar;
+        }
+        juce::String plan;
+        for (const auto& sc : p.songSections) plan << sc.name << " " << sc.bars << ", ";
+        std::cout << "  song plan: " << plan << "\n";
+        CHECK (p.songBars == 64 && p.songSections.size() == 6, "64-bar song with 6 sections");
+        CHECK (kick >= 0 && ! p.laneActiveAtBar (kick, breakStart) && ! p.laneActiveAtBar (kick, buildEnd) && p.laneActiveAtBar (kick, mainStart),
+               "kick rests in the break and the last build bar, plays in the main section");
+
+        p.songMode = true;
+        for (int i = 0; i < p.numLanes; ++i) p.lanes[(size_t) i].mute = (i != kick);
+        head.playing = true;
+        head.ppq = breakStart * 4.0 + 0.5;
+        render (p, head, 0.2, nullptr); // let earlier tails decay
+        render (p, head, 1.5, nullptr);
+        const float breakPeak = render (p, head, 1.0, nullptr);
+        head.ppq = mainStart * 4.0;
+        const float mainPeak = render (p, head, 2.0, nullptr);
+        CHECK (breakPeak < 0.01f && mainPeak > 0.05f, "song playback follows the arrangement (break " + juce::String (breakPeak, 3)
+               + ", main " + juce::String (mainPeak, 3) + ")");
+        for (int i = 0; i < p.numLanes; ++i) p.lanes[(size_t) i].mute = false;
+
+        auto mid = p.exportMidi();
+        juce::MidiFile mf;
+        juce::FileInputStream in (mid);
+        mf.readFrom (in);
+        int kickInBreak = 0, notes = 0;
+        double last = 0;
+        if (mf.getNumTracks() > 0)
+            for (auto* e : *mf.getTrack (0))
+                if (e->message.isNoteOn())
+                {
+                    ++notes;
+                    last = juce::jmax (last, e->message.getTimeStamp());
+                    const int bar = (int) (e->message.getTimeStamp() / (4 * 960));
+                    if (e->message.getNoteNumber() == cg::kBaseNote + kick && bar >= breakStart && bar < breakStart + 8) ++kickInBreak;
+                }
+        CHECK (notes > 200 && kickInBreak == 0 && last > (64 - 8) * 4 * 960 && last < 64 * 4 * 960,
+               "song exports as one long MIDI (" + juce::String (notes) + " notes, last bar " + juce::String ((int) (last / 3840)) + ")");
+
+        juce::MemoryBlock st;
+        p.getStateInformation (st);
+        GrooveboxProcessor s2;
+        s2.runSynchronously = true;
+        s2.setStateInformation (st.getData(), (int) st.getSize());
+        CHECK (s2.songMode.load() && s2.songBars == 64 && s2.songSections.size() == 6 && ! s2.laneActiveAtBar (kick, breakStart),
+               "song arrangement survives save/load");
+        p.songMode = false;
+    }
+
     // 8. UI snapshot
     if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr)
     {
         p.removeLane (0);
+        q.gen.bars = 8;
         q.generateAll();
+        q.makeSong (64);
+        q.songMode = true;
         q.previewPlaying = true;
         FakeHead h2;
         h2.playing = false;
@@ -319,6 +428,16 @@ int main (int argc, char** argv)
         juce::FileOutputStream os (pngFile);
         juce::PNGImageFormat().writeImageToStream (img, os);
         std::cout << "ok:   UI snapshot written\n";
+        {
+            cg::HelpOverlay helpView;
+            helpView.setSize (1400, 800);
+            helpView.setVisible (true);
+            auto himg = helpView.createComponentSnapshot (helpView.getLocalBounds(), true, 1.0f);
+            auto hf = outDir.getChildFile ("help.png");
+            hf.deleteFile();
+            juce::FileOutputStream hs (hf);
+            juce::PNGImageFormat().writeImageToStream (himg, hs);
+        }
         ed.reset();
     }
 

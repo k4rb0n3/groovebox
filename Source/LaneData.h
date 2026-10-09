@@ -11,7 +11,8 @@
 namespace cg
 {
 constexpr int kMaxLanes   = 32;
-constexpr int kMaxSteps   = 64;
+constexpr int kMaxSteps   = 1024; // 64 bars of 1/16
+constexpr int kViewSteps  = 64;   // steps shown at once (one page)
 constexpr int kNumOuts    = 32; // one stereo output per lane; output 1 is also Main
 constexpr int kBaseNote   = 36; // C1 triggers lane 1, C#1 lane 2, ...
 
@@ -109,6 +110,18 @@ struct Lane
 
     double stepBeats() const { return rates()[(size_t) juce::jlimit (0, (int) rates().size() - 1, rate)].beats; }
 };
+
+// Which steps of a lane are visible on a given page: { first step, count }.
+// Lanes up to 64 steps always show whole; longer lanes are shown 64 steps per page.
+inline std::pair<int, int> viewWindow (const Lane& lane, int page)
+{
+    const int len = juce::jlimit (1, kMaxSteps, lane.length);
+    if (len <= kViewSteps) return { 0, len };
+    const int pages = (len + kViewSteps - 1) / kViewSteps;
+    const int p = ((page % pages) + pages) % pages;
+    const int start = p * kViewSteps;
+    return { start, juce::jmin (kViewSteps, len - start) };
+}
 
 // Deterministic 0..1 random from integers, so playback and MIDI export agree
 // and an event never fires twice across block boundaries.

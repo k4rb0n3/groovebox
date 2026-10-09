@@ -1,12 +1,12 @@
 # Groovebox by PJH
 
-A drum groove instrument for FL Studio built around your own sample folders. Point each lane at a folder, scroll through samples while the groove plays, let Groovebox tell you which samples fit, and let the generator write grooves per genre, irregular polymeters, or completely rule-free patterns. Every lane can have its own mixer track, or play one of your own FL channels.
+A drum groove instrument for FL Studio built around your own sample folders. Point each lane at a folder, scroll through samples while the groove plays, let Groovebox tell you which samples fit, and let the generator write grooves per genre, long evolving loops, irregular polymeters, or a whole arranged track. Every lane can have its own mixer track. Click **Help** inside the plugin for a plain-language guide.
 
 ## Install / update
 
 1. Open the latest successful run under the **Actions** tab, download **Groovebox-Windows** from **Artifacts**, unzip it.
 2. Close FL Studio, then copy `Groovebox.vst3` into `C:\Program Files\Common Files\VST3\` (replace the old one).
-3. Open FL. Updates normally need no rescan. When an update changes outputs or parameters (like version 0.2), rescan once: **Options > Manage plugins**, untick **Verify plugins**, click **Find installed plugins**.
+3. Open FL. Updates normally need no rescan (the version number shows next to the title). When an update changes outputs or parameters (like version 0.2), rescan once: **Options > Manage plugins**, untick **Verify plugins**, click **Find installed plugins**.
 
 ## Quick start
 
@@ -15,6 +15,24 @@ A drum groove instrument for FL Studio built around your own sample folders. Poi
 3. Pick a genre and click **Generate**. Press Play in FL, or **Play** in Groovebox.
 4. Hover a sample name and **scroll** to dig. Click the name to audition.
 5. Click any lane to see its settings in the panel at the bottom.
+
+## Lane editor
+
+Click a lane and the bottom panel shows its sequence large, with a row for each step setting: **Velocity, Probability, Pitch, Pan, Cutoff, Sample start, Nudge, Ratchet**. Drag up and down to draw values (values are printed in the cells when there's room), double-click to reset a step, right-click a row to reset, randomize or ramp it. The panel also holds the lane's filter, resonance, attack, reverse, output and choke group. **Lane editor** (bottom right) hides it.
+
+## Long loops
+
+- **Loop** (1 to 64 bars) sets how long Generate writes. Long loops repeat the phrase but evolve bar by bar, with small fills every 4 and 8 bars.
+- A lane's **Length** goes up to 64 bars: up to 64 steps it moves by 1, beyond that by whole bars.
+- Long lanes are shown 4 bars at a time. Use **< >** next to the bar numbers, or **Follow** to track the playhead.
+
+## Song mode
+
+Turn on **Song**, pick a length (32 to 128 bars) and press **Make song**. Groovebox arranges intro, build, main, break and outro and decides which lanes play in each section (the kick drops out for the last bar of a build). It follows FL's song position, lanes sitting out the current section are dimmed, and **Save MIDI / Drag MIDI** export the whole arrangement.
+
+## Genres and tempo
+
+House, Deep House, Tech House, Minimal, Techno, Dub Techno, Breaks, UK Garage, IDM, Ambient, Drum & Bass, Jungle, Dubstep / Halftime, Trap (with hat rolls), Hip-hop / Boom bap, Downtempo, plus **Hybrid** and **Free**. Picking a genre sets the **BPM** box to its typical tempo; that tempo drives Groovebox's own **Play** button. When FL plays, FL's tempo is used, so set FL to match.
 
 ## Sample fit
 
@@ -46,17 +64,7 @@ Manual edits (scrolling, drawing steps) still work on locked lanes.
 1. Open Groovebox's plugin wrapper, go to the **Processing** tab, click **Auto map outputs**.
 2. Every lane plays on its own output (Lane 1 also feeds Main), so each lands on its own mixer track.
 
-Change a lane's routing in the lane panel (**Output**: own output, Main, or any Out 2 to 32). Without auto-mapped outputs everything plays through Main.
-
-## Lanes that play your FL channels
-
-Set a lane to **Sends notes to an FL channel** in the lane panel. It keeps its groove, but instead of playing a sample it sends MIDI notes, so the sound comes from any FL channel (Sampler with FL's envelopes and filters, Slicex, a synth...).
-
-1. In Groovebox's wrapper settings, set the **MIDI output port** to a free number (for example 10).
-2. In the target channel's settings, set its **MIDI input port** to the same number.
-3. Pick the lane's **MIDI** channel and **Note** in the lane panel (C5 is FL's default root note).
-
-If several target channels share the port and all play together, give each lane a different MIDI channel and set each target to listen to only its channel, or use separate ports with one Groovebox lane each.
+Change a lane's routing in the lane editor (**Output**: own output, main output, or any output 2 to 32). Without auto-mapped outputs everything plays through the main output.
 
 ## Controls
 
@@ -64,13 +72,15 @@ If several target channels share the port and all play together, give each lane 
 
 | Control | What it does |
 |---|---|
+| Help | Plain-language guide to every control |
 | Setups | Save, load, last session |
 | Library... / Shuffle samples / Fit filter | Map a library, re-dig every unlocked lane, skip poor fits while scrolling |
 | Genre | House, Deep House, Tech House, Minimal, Techno, Dub Techno, Breaks, UK Garage, IDM, Ambient, **Hybrid** (every lane borrows from a random genre), **Free** (no genre rules) |
 | Generate / Mutate + amount | New groove, or evolve the current one (pattern-locked lanes are kept) |
 | Density / Variation / Irregular | How busy; ghosts, velocity spread, probability and micro timing; odd lengths, odd rates and Euclidean placement |
 | Swing x / Humanize x | Scale every lane's swing and humanize (automatable) |
-| Draw | What dragging on the step grids edits: Steps, Velocity, Probability, Nudge, Ratchet, Pitch, Pan, Cutoff, Sample start |
+| Loop / Song / Make song | Bars Generate writes; song mode on/off; arrange a full track |
+| BPM | Tempo for Groovebox's own Play button (follows the genre) |
 | Bars / Drag MIDI / Save MIDI | Export the groove as MIDI (saved to Documents\Groovebox\MIDI) |
 | Play / Sequencer | Preview without FL's transport / turn the sequencer off to play Groovebox from MIDI only (C3 = lane 1, C#3 = lane 2...) |
 
@@ -86,8 +96,6 @@ If several target channels share the port and all play together, give each lane 
 | Lvl, Pan, Pitch, Cut | Level, pan, pitch and filter cutoff. **Automatable in FL** ("Lane 3 Cutoff" etc.) |
 | Decay, Swing, Hum | Sample length, lane swing, humanize |
 | Step grid | Click to toggle, drag to paint, right-click for clear, shift, reverse, randomize velocity/pitch/pan, copy/paste |
-
-**Lane panel (bottom)**: play mode (sample or FL channel), MIDI channel and note, filter type (low/high/band-pass) and resonance, attack, reverse, output, choke group.
 
 ## Building yourself (optional)
 
