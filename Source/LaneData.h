@@ -12,7 +12,7 @@ namespace cg
 {
 constexpr int kMaxLanes   = 32;
 constexpr int kMaxSteps   = 64;
-constexpr int kNumOuts    = 8;
+constexpr int kNumOuts    = 32; // one stereo output per lane; output 1 is also Main
 constexpr int kBaseNote   = 36; // C1 triggers lane 1, C#1 lane 2, ...
 
 struct Step
@@ -22,7 +22,14 @@ struct Step
     float prob    = 1.0f;  // 0..1, chance the step plays each time around
     float nudge   = 0.0f;  // -0.5..0.5 of a step, micro timing
     int   ratchet = 1;     // 1..4 hits inside the step
+    float pitch   = 0.0f;  // -12..12 semitones on top of the lane pitch
+    float pan     = 0.0f;  // -1..1 on top of the lane pan
+    float cutoff  = 1.0f;  // 0..1, 1 = lane cutoff, lower darkens (up to 6 octaves)
+    float start   = 0.0f;  // 0..1 sample start offset (of the first 50% of the sample)
 };
+
+enum class FilterType { Off, LowPass, HighPass, BandPass };
+enum class LaneMode { Sample, FLChannel };
 
 enum class Role
 {
@@ -77,20 +84,28 @@ struct Lane
     int rate   = kRate16; // index into rates()
     std::array<Step, kMaxSteps> steps {};
 
-    float levelDb  = -6.0f; // -48..+6
-    float pan      = 0.0f;  // -1..1
-    float pitch    = 0.0f;  // semitones -24..24
+    // Level, pan, pitch and cutoff live in automatable parameters (see the processor).
     float decay    = 1.0f;  // 0..1, 1 = full sample
+    float attack   = 0.0f;  // 0..1 -> 0..200 ms fade-in
+    float reso     = 0.2f;  // 0..1 filter resonance
+    FilterType filter = FilterType::Off;
+    bool  reverse  = false;
+    LaneMode mode  = LaneMode::Sample;
+    int   midiChannel = 1;  // 1..16 when mode == FLChannel
+    int   midiNote    = 60; // C5 in FL's naming
+    bool  lockSample  = false; // randomizers and library scans leave the sample alone
+    bool  lockPattern = false; // Generate and Mutate leave the pattern alone
     float swing    = 0.0f;  // 0..0.75
     float humanize = 0.15f; // 0..1
     bool  mute = false, solo = false;
     int   choke = 0;        // 0 = none, 1..4 groups
-    int   out   = 0;        // output pair 0..7
+    int   out   = -1;       // -1 = own output (lane index), else output pair 0..31 (0 = Main)
 
     juce::File folder;
     juce::Array<juce::File> files;
     int fileIndex = -1;
     SamplePtr sample;
+    juce::File pendingFile; // sample to select once a background folder scan finishes
 
     double stepBeats() const { return rates()[(size_t) juce::jlimit (0, (int) rates().size() - 1, rate)].beats; }
 };
@@ -109,7 +124,7 @@ inline float hash01 (juce::uint32 seed, int lane, juce::int64 k, int salt)
     return (float) ((x >> 40) & 0xFFFFFF) / (float) 0x1000000;
 }
 
-// Calls fn(ppqTime, velocity) for every hit of this lane in [from, to).
+// Calls fn(ppqTime, velocity, step) for every hit of this lane in [from, to).
 template <typename Fn>
 void collectEvents (const Lane& lane, int laneIndex, juce::uint32 seed, double from, double to,
                     double bpm, float swingScale, float humanizeScale, Fn&& fn,
@@ -157,7 +172,7 @@ void collectEvents (const Lane& lane, int laneIndex, juce::uint32 seed, double f
             const float  vr = r == 0 ? vel : vel * (0.8f - 0.08f * (float) r);
 
             if (clip || (tr >= from && tr < to))
-                fn (tr, vr);
+                fn (tr, vr, st);
         }
     }
 }

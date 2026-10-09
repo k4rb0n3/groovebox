@@ -11,6 +11,9 @@ const juce::Colour kCtrl    { 0xff2a2d33 };
 const juce::Colour kText    { 0xffd8d8d8 };
 const juce::Colour kDim     { 0xff8a8d93 };
 const juce::Colour kAccent  { 0xfff0b44c };
+const juce::Colour kGood    { 0xff7bd88f };
+const juce::Colour kOk      { 0xffe8c94a };
+const juce::Colour kPoor    { 0xffe06c6c };
 
 struct Clip
 {
@@ -21,6 +24,16 @@ struct Clip
 Clip& clipboard() { static Clip c; return c; }
 
 juce::String pct (double v) { return juce::String (juce::roundToInt (v * 100.0)) + "%"; }
+
+juce::Colour fitColour (int score)
+{
+    if (score < 0)  return kDim.withAlpha (0.5f);
+    if (score >= 75) return kGood;
+    if (score >= 50) return kOk;
+    return kPoor;
+}
+
+juce::String noteLabel (int midi) { return juce::MidiMessage::getMidiNoteName (midi, true, true, 5); }
 } // namespace
 
 //==============================================================================
@@ -87,6 +100,7 @@ void Look::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce:
     auto col = b.getToggleState() ? b.findColour (juce::TextButton::buttonOnColourId) : base;
     if (down) col = col.brighter (0.15f);
     else if (over) col = col.brighter (0.07f);
+    if (! b.isEnabled()) col = col.withAlpha (0.4f);
     g.setColour (col);
     g.fillRoundedRectangle (r, 3.0f);
 }
@@ -94,13 +108,37 @@ void Look::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce:
 void Look::drawComboBox (juce::Graphics& g, int w, int h, bool, int, int, int, int, juce::ComboBox& box)
 {
     auto r = juce::Rectangle<float> (0, 0, (float) w, (float) h).reduced (0.5f);
-    g.setColour (box.findColour (juce::ComboBox::backgroundColourId));
+    g.setColour (box.findColour (juce::ComboBox::backgroundColourId).withAlpha (box.isEnabled() ? 1.0f : 0.4f));
     g.fillRoundedRectangle (r, 3.0f);
     juce::Path p;
     const float ax = (float) w - 10.0f, ay = (float) h * 0.5f;
     p.addTriangle (ax - 3.5f, ay - 2.0f, ax + 3.5f, ay - 2.0f, ax, ay + 2.5f);
     g.setColour (kDim);
     g.fillPath (p);
+}
+
+//==============================================================================
+void LockButton::paintButton (juce::Graphics& g, bool over, bool)
+{
+    const bool locked = getToggleState();
+    auto r = getLocalBounds().toFloat().reduced (2.0f);
+    const float s = juce::jmin (r.getWidth(), r.getHeight());
+    auto box = juce::Rectangle<float> (s, s).withCentre (r.getCentre());
+
+    const auto col = locked ? kAccent : (over ? kText : kDim.withAlpha (0.7f));
+    auto body = box.withTrimmedTop (box.getHeight() * 0.45f);
+    const float shackleW = body.getWidth() * 0.6f;
+    juce::Path shackle;
+    const float sx = body.getCentreX() - shackleW * 0.5f + (locked ? 0.0f : shackleW * 0.35f);
+    shackle.addRoundedRectangle (sx, box.getY() + 1.0f, shackleW, box.getHeight() * 0.62f, shackleW * 0.5f);
+
+    g.setColour (col);
+    g.strokePath (shackle, juce::PathStrokeType (1.6f));
+    g.setColour (kRow);
+    g.fillRect (body.expanded (1.0f, 0.0f));
+    g.setColour (col);
+    if (locked) g.fillRoundedRectangle (body, 2.0f);
+    else        g.drawRoundedRectangle (body.reduced (0.5f), 2.0f, 1.3f);
 }
 
 //==============================================================================
@@ -130,44 +168,44 @@ void StepGrid::paint (juce::Graphics& g)
         if (st.on)
         {
             const float alpha = 0.35f + 0.65f * st.prob;
+            auto fillFromBottom = [&] (float frac, float a)
+            {
+                g.setColour (col.withAlpha (a));
+                g.fillRoundedRectangle (r.withTop (r.getBottom() - r.getHeight() * juce::jlimit (0.0f, 1.0f, frac)), 2.0f);
+            };
+            auto bipolar = [&] (float frac) // frac in -1..1
+            {
+                g.setColour (col.withAlpha (0.2f));
+                g.fillRoundedRectangle (r, 2.0f);
+                const float cy = r.getCentreY();
+                const float y = cy - frac * r.getHeight() * 0.5f;
+                g.setColour (col);
+                g.fillRect (juce::Rectangle<float>::leftTopRightBottom (r.getX(), juce::jmin (cy, y), r.getRight(), juce::jmax (cy, y) + 1.0f));
+            };
+
             switch (editMode)
             {
                 case EditMode::Steps:
-                case EditMode::Velocity:
-                {
-                    const float bh = r.getHeight() * (0.2f + 0.8f * st.vel);
-                    g.setColour (col.withAlpha (alpha));
-                    g.fillRoundedRectangle (r.withTop (r.getBottom() - bh), 2.0f);
-                    break;
-                }
-                case EditMode::Probability:
-                {
-                    g.setColour (col.withAlpha (0.18f));
-                    g.fillRoundedRectangle (r, 2.0f);
-                    g.setColour (col.withAlpha (0.95f));
-                    g.fillRoundedRectangle (r.withTop (r.getBottom() - r.getHeight() * st.prob), 2.0f);
-                    break;
-                }
-                case EditMode::Nudge:
-                {
-                    g.setColour (col.withAlpha (0.25f));
-                    g.fillRoundedRectangle (r, 2.0f);
-                    const float cy = r.getCentreY();
-                    const float top = cy - st.nudge * r.getHeight();
-                    g.setColour (col);
-                    g.fillRect (juce::Rectangle<float>::leftTopRightBottom (r.getX(), juce::jmin (cy, top), r.getRight(), juce::jmax (cy, top) + 1.0f));
-                    break;
-                }
-                case EditMode::Ratchet:
-                {
-                    g.setColour (col.withAlpha (0.2f));
-                    g.fillRoundedRectangle (r, 2.0f);
-                    const int n = juce::jlimit (1, 4, st.ratchet);
-                    const float bh = r.getHeight() * (float) n / 4.0f;
-                    g.setColour (col);
-                    g.fillRoundedRectangle (r.withTop (r.getBottom() - bh), 2.0f);
-                    break;
-                }
+                case EditMode::Velocity:    fillFromBottom (0.2f + 0.8f * st.vel, alpha); break;
+                case EditMode::Probability: g.setColour (col.withAlpha (0.18f)); g.fillRoundedRectangle (r, 2.0f);
+                                            fillFromBottom (st.prob, 0.95f); break;
+                case EditMode::Nudge:       bipolar (st.nudge * 2.0f); break;
+                case EditMode::Ratchet:     g.setColour (col.withAlpha (0.2f)); g.fillRoundedRectangle (r, 2.0f);
+                                            fillFromBottom ((float) juce::jlimit (1, 4, st.ratchet) / 4.0f, 1.0f); break;
+                case EditMode::Pitch:       bipolar (st.pitch / 12.0f); break;
+                case EditMode::Pan:         bipolar (st.pan); break;
+                case EditMode::Cutoff:      g.setColour (col.withAlpha (0.18f)); g.fillRoundedRectangle (r, 2.0f);
+                                            fillFromBottom (st.cutoff, 0.95f); break;
+                case EditMode::Start:       g.setColour (col.withAlpha (0.18f)); g.fillRoundedRectangle (r, 2.0f);
+                                            fillFromBottom (juce::jmax (0.04f, st.start), 0.95f); break;
+            }
+
+            if (editMode == EditMode::Pitch && cw > 16.0f && std::abs (st.pitch) > 0.01f)
+            {
+                g.setColour (kText);
+                g.setFont (juce::FontOptions (9.5f));
+                g.drawText ((st.pitch > 0 ? "+" : "") + juce::String (juce::roundToInt (st.pitch)), r.toNearestInt(),
+                            juce::Justification::centredTop, false);
             }
 
             if (editMode == EditMode::Steps)
@@ -184,6 +222,12 @@ void StepGrid::paint (juce::Graphics& g)
                     const float nx = r.getCentreX() + st.nudge * cw;
                     g.fillRect (nx - 0.75f, r.getBottom() - 4.0f, 1.5f, 4.0f);
                 }
+                // A small corner tick marks steps with pitch, pan, cutoff or start set.
+                if ((std::abs (st.pitch) > 0.01f || std::abs (st.pan) > 0.01f || st.cutoff < 0.99f || st.start > 0.01f) && cw > 6.0f)
+                {
+                    g.setColour (kText.withAlpha (0.7f));
+                    g.fillRect (r.getRight() - 4.0f, r.getY() + 2.0f, 2.0f, 2.0f);
+                }
             }
         }
 
@@ -197,6 +241,7 @@ void StepGrid::paint (juce::Graphics& g)
 
 void StepGrid::mouseDown (const juce::MouseEvent& e)
 {
+    if (onTouched) onTouched();
     if (e.mods.isPopupMenu())
     {
         showMenu();
@@ -239,6 +284,10 @@ void StepGrid::applyAt (const juce::MouseEvent& e, bool isDown)
             case EditMode::Probability: if (st.on) st.prob = juce::jmax (0.05f, v); break;
             case EditMode::Nudge:       if (st.on) st.nudge = juce::jlimit (-0.5f, 0.5f, v - 0.5f); break;
             case EditMode::Ratchet:     if (st.on) st.ratchet = 1 + juce::jlimit (0, 3, (int) (v * 4.0f)); break;
+            case EditMode::Pitch:       if (st.on) st.pitch = (float) juce::jlimit (-12, 12, juce::roundToInt ((v - 0.5f) * 24.0f)); break;
+            case EditMode::Pan:         if (st.on) st.pan = juce::jlimit (-1.0f, 1.0f, (v - 0.5f) * 2.0f); break;
+            case EditMode::Cutoff:      if (st.on) st.cutoff = v; break;
+            case EditMode::Start:       if (st.on) st.start = v < 0.03f ? 0.0f : v; break;
         }
     }
 
@@ -255,25 +304,13 @@ void StepGrid::showMenu()
     m.addItem (4, "Shift right");
     m.addItem (5, "Reverse");
     m.addItem (6, "Randomize velocities");
-    m.addItem (7, "Reset nudge, probability, ratchets");
+    m.addItem (11, "Randomize pitch (+/-2 st)");
+    m.addItem (12, "Randomize pan");
+    m.addItem (7, "Reset step settings (nudge, probability, ratchet, pitch, pan, cutoff, start)");
     m.addItem (8, "Double length (copy pattern)", proc.lanes[(size_t) lane].length <= kMaxSteps / 2);
     m.addSeparator();
     m.addItem (9, "Copy lane pattern");
     m.addItem (10, "Paste lane pattern", clipboard().valid);
-    m.addSeparator();
-
-    juce::PopupMenu choke;
-    const int curChoke = proc.lanes[(size_t) lane].choke;
-    choke.addItem (100, "None", true, curChoke == 0);
-    for (int i = 1; i <= 4; ++i)
-        choke.addItem (100 + i, "Group " + juce::String (i), true, curChoke == i);
-    m.addSubMenu ("Choke group", choke);
-
-    juce::PopupMenu outs;
-    const int curOut = proc.lanes[(size_t) lane].out;
-    for (int i = 0; i < kNumOuts; ++i)
-        outs.addItem (200 + i, i == 0 ? juce::String ("Main") : "Out " + juce::String (i + 1), true, curOut == i);
-    m.addSubMenu ("Output", outs);
 
     juce::Component::SafePointer<StepGrid> self (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [self] (int r)
@@ -295,17 +332,22 @@ void StepGrid::showMenu()
                 case 4: std::rotate (first, last - 1, last); break;
                 case 5: std::reverse (first, last); break;
                 case 6: for (auto it = first; it != last; ++it) it->vel = 0.25f + rnd.nextFloat() * 0.75f; break;
-                case 7: for (auto it = first; it != last; ++it) { it->nudge = 0.0f; it->prob = 1.0f; it->ratchet = 1; } break;
+                case 11: for (auto it = first; it != last; ++it) it->pitch = (float) (rnd.nextInt (5) - 2); break;
+                case 12: for (auto it = first; it != last; ++it) it->pan = (rnd.nextFloat() - 0.5f) * 1.2f; break;
+                case 7:
+                    for (auto it = first; it != last; ++it)
+                    {
+                        it->nudge = 0.0f; it->prob = 1.0f; it->ratchet = 1;
+                        it->pitch = 0.0f; it->pan = 0.0f; it->cutoff = 1.0f; it->start = 0.0f;
+                    }
+                    break;
                 case 8:
                     for (int i = 0; i < len && len * 2 <= kMaxSteps; ++i) L.steps[(size_t) (i + len)] = L.steps[(size_t) i];
                     L.length = juce::jmin (kMaxSteps, len * 2);
                     break;
                 case 9: clipboard() = { true, L.steps, L.length, L.rate }; break;
                 case 10: if (clipboard().valid) { L.steps = clipboard().steps; L.length = clipboard().length; L.rate = clipboard().rate; } break;
-                default:
-                    if (r >= 100 && r <= 104) L.choke = r - 100;
-                    if (r >= 200 && r < 200 + kNumOuts) L.out = r - 200;
-                    break;
+                default: break;
             }
         }
         self->repaint();
@@ -327,14 +369,15 @@ void NumberBox::setValue (int v, bool notify)
 void NumberBox::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat().reduced (0.5f);
-    g.setColour (kCtrl);
+    const float alpha = isEnabled() ? 1.0f : 0.4f;
+    g.setColour (kCtrl.withAlpha (alpha));
     g.fillRoundedRectangle (r, 3.0f);
     const float frac = (float) (value - lo) / (float) juce::jmax (1, hi - lo);
-    g.setColour (accent.withAlpha (0.35f));
+    g.setColour (accent.withAlpha (0.35f * alpha));
     g.fillRoundedRectangle (r.withWidth (juce::jmax (3.0f, r.getWidth() * frac)), 3.0f);
-    g.setColour (kText);
+    g.setColour (kText.withAlpha (alpha));
     g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-    g.drawText (juce::String (value), getLocalBounds(), juce::Justification::centred, false);
+    g.drawText (format ? format (value) : juce::String (value), getLocalBounds(), juce::Justification::centred, false);
 }
 
 void NumberBox::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
@@ -359,13 +402,46 @@ void SampleSlot::paint (juce::Graphics& g)
     }
 
     auto inner = getLocalBounds().reduced (6, 2);
-    const int count = L.files.size();
 
-    juce::String counter = count > 0 ? juce::String (L.fileIndex + 1) + "/" + juce::String (count) : juce::String();
+    if (L.mode == LaneMode::FLChannel)
+    {
+        g.setFont (juce::FontOptions (10.5f));
+        g.setColour (kDim);
+        g.drawText ("FL channel mode", inner.removeFromTop (inner.getHeight() / 2), juce::Justification::bottomLeft, true);
+        g.setFont (juce::FontOptions (12.5f));
+        g.setColour (kText);
+        g.drawText ("MIDI ch " + juce::String (L.midiChannel) + ", note " + noteLabel (L.midiNote), inner,
+                    juce::Justification::topLeft, true);
+        return;
+    }
+
+    const int count = L.files.size();
+    const auto fit = proc.laneFit (lane);
+    Features feat;
+    const bool analyzed = L.sample != nullptr && proc.fileFeatures (L.sample->file, feat);
+
+    // Right column: fit dot, counter, detected note.
+    auto right = inner.removeFromRight (56);
     g.setFont (juce::FontOptions (10.5f));
     g.setColour (kDim);
-    g.drawText (counter, inner.removeFromRight (52), juce::Justification::centredRight, false);
+    if (count > 0)
+        g.drawText (juce::String (L.fileIndex + 1) + "/" + juce::String (count), right.removeFromTop (right.getHeight() / 2),
+                    juce::Justification::bottomRight, false);
+    if (L.sample != nullptr)
+    {
+        auto dotRow = right;
+        auto dot = dotRow.removeFromRight (9).withSizeKeepingCentre (8, 8).toFloat();
+        g.setColour (fitColour (fit.score));
+        if (fit.score >= 0) g.fillEllipse (dot);
+        else                g.drawEllipse (dot.reduced (0.5f), 1.0f);
+        if (analyzed && feat.pitchHz > 0.0f)
+        {
+            g.setColour (kDim);
+            g.drawText (noteName (feat.pitchHz), dotRow.withTrimmedRight (3), juce::Justification::centredRight, false);
+        }
+    }
 
+    g.setColour (kDim);
     g.drawText (L.folder == juce::File() ? juce::String ("no folder") : L.name, inner.removeFromTop (inner.getHeight() / 2),
                 juce::Justification::bottomLeft, true);
 
@@ -380,6 +456,28 @@ void SampleSlot::paint (juce::Graphics& g)
         g.setColour (kDim.withAlpha (0.7f));
         g.drawText ("drop a folder here", inner, juce::Justification::topLeft, true);
     }
+}
+
+juce::String SampleSlot::getTooltip()
+{
+    const auto& L = proc.lanes[(size_t) lane];
+    if (L.mode == LaneMode::FLChannel)
+        return "This lane sends notes to an FL channel instead of playing a sample. Change it in the lane panel below.";
+    if (L.sample == nullptr)
+        return "Drop a folder (or a sample) here, or use the ... button.";
+
+    const auto fit = proc.laneFit (lane);
+    juce::String t = L.sample->file.getFileName() + "\n";
+    if (fit.score < 0)
+        t << "Still listening to this sample...";
+    else
+        t << "Fit " << fit.score << "/100: " << fit.reason;
+
+    Features f;
+    if (proc.fileFeatures (L.sample->file, f) && f.pitchHz > 0.0f)
+        t << "\nPitch: " << noteName (f.pitchHz) << " (" << juce::String (f.pitchHz, 1) << " Hz)";
+    t << "\nScroll to dig, click to audition" << (L.lockSample ? ". Sample is locked." : ".");
+    return t;
 }
 
 void SampleSlot::mouseUp (const juce::MouseEvent& e)
@@ -399,6 +497,7 @@ void SampleSlot::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheel
     wheelAcc = 0.0f;
     proc.stepSample (lane, delta);
     repaint();
+    if (onChange) onChange();
 }
 
 void SampleSlot::filesDropped (const juce::StringArray& files, int, int)
@@ -423,16 +522,21 @@ void SampleSlot::filesDropped (const juce::StringArray& files, int, int)
 }
 
 //==============================================================================
-LaneRow::LaneRow (GrooveboxProcessor& p, const EditMode& mode)
-    : proc (p), slot (p), grid (p, mode)
+LaneRow::LaneRow (GrooveboxProcessor& p, const EditMode& mode, const int& selectedLane)
+    : proc (p), selected (selectedLane), slot (p), grid (p, mode)
 {
     for (auto* b : { &muteBtn, &soloBtn, &prevBtn, &nextBtn, &randBtn, &folderBtn, &genBtn, &mutBtn, &removeBtn })
         addAndMakeVisible (b);
     for (auto* c : { &roleBox, &rateBox })
         addAndMakeVisible (c);
+    addAndMakeVisible (lockSampleBtn);
+    addAndMakeVisible (lockPatternBtn);
     addAndMakeVisible (lenSlider);
     addAndMakeVisible (slot);
     addAndMakeVisible (grid);
+
+    // Any click inside the row selects the lane for the panel below.
+    addMouseListener (this, true);
 
     muteBtn.setClickingTogglesState (true);
     soloBtn.setClickingTogglesState (true);
@@ -440,14 +544,16 @@ LaneRow::LaneRow (GrooveboxProcessor& p, const EditMode& mode)
     soloBtn.setColour (juce::TextButton::buttonOnColourId, kAccent);
     muteBtn.setTooltip ("Mute lane");
     soloBtn.setTooltip ("Solo lane");
+    lockSampleBtn.setTooltip ("Lock this sample: Shuffle, ? and library scans won't change it");
+    lockPatternBtn.setTooltip ("Lock this pattern: Generate and Mutate won't change it");
     prevBtn.setTooltip ("Previous sample (or scroll the mouse wheel over the name)");
     nextBtn.setTooltip ("Next sample");
-    randBtn.setTooltip ("Random sample from this folder");
+    randBtn.setTooltip ("Random sample, favouring ones that fit this role and genre");
     folderBtn.setTooltip ("Choose a sample folder for this lane");
     genBtn.setTooltip ("Generate a new pattern for this lane only");
     mutBtn.setTooltip ("Mutate this lane's pattern");
     removeBtn.setTooltip ("Remove lane");
-    roleBox.setTooltip ("Role: tells the generator how this lane should behave");
+    roleBox.setTooltip ("Role: tells the generator and the fit rating what this lane is");
     rateBox.setTooltip ("Step rate. Mix rates across lanes for polyrhythm");
     lenSlider.setTooltip ("Lane length in steps (1 to 64): drag up/down or scroll. Different lengths drift against each other");
 
@@ -458,6 +564,8 @@ LaneRow::LaneRow (GrooveboxProcessor& p, const EditMode& mode)
 
     muteBtn.onClick = [this] { edit ([this] (Lane& l) { l.mute = muteBtn.getToggleState(); }); };
     soloBtn.onClick = [this] { edit ([this] (Lane& l) { l.solo = soloBtn.getToggleState(); }); };
+    lockSampleBtn.onClick = [this] { edit ([this] (Lane& l) { l.lockSample = lockSampleBtn.getToggleState(); }); slot.repaint(); };
+    lockPatternBtn.onClick = [this] { edit ([this] (Lane& l) { l.lockPattern = lockPatternBtn.getToggleState(); }); refresh(); };
     roleBox.onChange = [this]
     {
         edit ([this] (Lane& l) { l.role = (Role) (roleBox.getSelectedId() - 1); });
@@ -484,20 +592,23 @@ LaneRow::LaneRow (GrooveboxProcessor& p, const EditMode& mode)
         if (! start.isDirectory()) start = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
 
         chooser = std::make_unique<juce::FileChooser> ("Choose a sample folder for this lane", start);
+        juce::Component::SafePointer<LaneRow> self (this);
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories
                                   | juce::FileBrowserComponent::canSelectFiles,
-                              [this] (const juce::FileChooser& fc)
+                              [self] (const juce::FileChooser& fc)
                               {
+                                  if (self == nullptr) return;
                                   const auto f = fc.getResult();
+                                  auto& pr = self->proc;
                                   if (f.isDirectory())
-                                      proc.setLaneFolder (lane, f, true);
+                                      pr.setLaneFolder (self->lane, f, true);
                                   else if (f.existsAsFile())
                                   {
-                                      proc.setLaneFolder (lane, f.getParentDirectory(), true);
-                                      const int idx = proc.lanes[(size_t) lane].files.indexOf (f);
-                                      if (idx >= 0) proc.loadSampleIndex (lane, idx);
+                                      pr.setLaneFolder (self->lane, f.getParentDirectory(), true);
+                                      const int idx = pr.lanes[(size_t) self->lane].files.indexOf (f);
+                                      if (idx >= 0) pr.loadSampleIndex (self->lane, idx);
                                   }
-                                  refresh();
+                                  self->refresh();
                               });
     };
 
@@ -507,16 +618,24 @@ LaneRow::LaneRow (GrooveboxProcessor& p, const EditMode& mode)
         juce::MessageManager::callAsync ([self] { if (self != nullptr) self->proc.removeLane (self->lane); });
     };
 
-    setupKnob (level, -48.0, 6.0, -6.0, "Level", [this] (float v) { edit ([v] (Lane& l) { l.levelDb = v; }); },
-               [] (double v) { return juce::String (v, 1) + " dB"; });
-    setupKnob (pan, -1.0, 1.0, 0.0, "Pan", [this] (float v) { edit ([v] (Lane& l) { l.pan = v; }); },
-               [] (double v)
-               {
-                   const int p = juce::roundToInt (v * 100.0);
-                   return p == 0 ? juce::String ("C") : (p < 0 ? "L" + juce::String (-p) : "R" + juce::String (p));
-               });
-    setupKnob (pitch, -24.0, 24.0, 0.0, "Pitch", [this] (float v) { edit ([v] (Lane& l) { l.pitch = v; }); },
-               [] (double v) { return (v > 0 ? "+" : "") + juce::String (v, 2) + " st"; });
+    // Automatable knobs (attached to parameters in setLane).
+    for (auto* k : { &level, &pan, &pitch, &cutoff })
+    {
+        addAndMakeVisible (k);
+        k->setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        k->setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
+        k->setPopupDisplayEnabled (true, false, nullptr);
+        k->setMouseDragSensitivity (160);
+    }
+    pan.getProperties().set ("bipolar", true);
+    pitch.getProperties().set ("bipolar", true);
+    const std::pair<juce::Slider*, const char*> autoNames[] = { { &level, "Level" }, { &pan, "Pan" }, { &pitch, "Pitch" }, { &cutoff, "Cutoff" } };
+    for (auto [k, nm] : autoNames)
+    {
+        const juce::String name (nm);
+        k->onValueChange = [k, name] { k->setTooltip (name + ": " + k->getTextFromValue (k->getValue()) + " (automatable)"); };
+    }
+
     setupKnob (decay, 0.0, 1.0, 1.0, "Decay", [this] (float v) { edit ([v] (Lane& l) { l.decay = v; }); },
                [] (double v)
                {
@@ -528,9 +647,7 @@ LaneRow::LaneRow (GrooveboxProcessor& p, const EditMode& mode)
     setupKnob (hum, 0.0, 1.0, 0.15, "Humanize", [this] (float v) { edit ([v] (Lane& l) { l.humanize = v; }); },
                [] (double v) { return pct (v); });
 
-    pan.getProperties().set ("bipolar", true);
-    pitch.getProperties().set ("bipolar", true);
-    pitch.setRange (-24.0, 24.0, 0.01);
+    grid.onTouched = [this] { if (onSelect) onSelect (lane); };
 }
 
 template <typename Fn>
@@ -564,6 +681,15 @@ void LaneRow::setLane (int li)
     lane = li;
     slot.setLane (li);
     grid.setLane (li);
+
+    levelAtt.reset(); panAtt.reset(); pitchAtt.reset(); cutoffAtt.reset();
+    levelAtt  = std::make_unique<SliderAtt> (proc.apvts, GrooveboxProcessor::paramId (li, "level"), level);
+    panAtt    = std::make_unique<SliderAtt> (proc.apvts, GrooveboxProcessor::paramId (li, "pan"), pan);
+    pitchAtt  = std::make_unique<SliderAtt> (proc.apvts, GrooveboxProcessor::paramId (li, "pitch"), pitch);
+    cutoffAtt = std::make_unique<SliderAtt> (proc.apvts, GrooveboxProcessor::paramId (li, "cutoff"), cutoff);
+    for (auto* k : { &level, &pan, &pitch, &cutoff })
+        if (k->onValueChange) k->onValueChange();
+
     refresh();
 }
 
@@ -574,25 +700,26 @@ void LaneRow::refresh()
 
     muteBtn.setToggleState (l.mute, n);
     soloBtn.setToggleState (l.solo, n);
+    lockSampleBtn.setToggleState (l.lockSample, n);
+    lockPatternBtn.setToggleState (l.lockPattern, n);
     roleBox.setSelectedId ((int) l.role + 1, n);
     rateBox.setSelectedId (l.rate + 1, n);
     lenSlider.setValue (l.length, false);
     lenSlider.accent = roleColour (l.role);
-    level.setValue (l.levelDb, n);
-    pan.setValue (l.pan, n);
-    pitch.setValue (l.pitch, n);
     decay.setValue (l.decay, n);
     swing.setValue (l.swing, n);
     hum.setValue (l.humanize, n);
 
-    const auto col = roleColour (l.role);
-    for (auto* k : { &level, &pan, &pitch, &decay, &swing, &hum })
-        k->setColour (juce::Slider::rotarySliderFillColourId, col);
+    genBtn.setEnabled (! l.lockPattern);
+    mutBtn.setEnabled (! l.lockPattern);
+    const bool sampleMode = l.mode == LaneMode::Sample;
+    for (auto* b : { &prevBtn, &nextBtn, &randBtn, &folderBtn })
+        b->setEnabled (sampleMode);
+    randBtn.setEnabled (sampleMode && ! l.lockSample);
 
-    juce::String extra;
-    if (l.choke > 0) extra << "  choke " << l.choke;
-    if (l.out > 0)   extra << "  out " << (l.out + 1);
-    genBtn.setTooltip ("Generate a new pattern for this lane only" + extra);
+    const auto col = roleColour (l.role);
+    for (auto* k : { &level, &pan, &pitch, &cutoff, &decay, &swing, &hum })
+        k->setColour (juce::Slider::rotarySliderFillColourId, col);
 
     slot.repaint();
     grid.repaint();
@@ -616,13 +743,31 @@ void LaneRow::tick()
     }
 }
 
+void LaneRow::mouseDown (const juce::MouseEvent&)
+{
+    if (onSelect) onSelect (lane);
+}
+
 void LaneRow::paint (juce::Graphics& g)
 {
     g.setColour (kRow);
     g.fillRoundedRectangle (getLocalBounds().toFloat(), 3.0f);
+    if (selected == lane)
+    {
+        g.setColour (kAccent.withAlpha (0.55f));
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 3.0f, 1.0f);
+    }
     const auto col = roleColour (proc.lanes[(size_t) lane].role);
     g.setColour (col.withAlpha (0.35f + 0.65f * juce::jlimit (0.0f, 1.0f, meter)));
     g.fillRoundedRectangle (0.0f, 2.0f, 4.0f, (float) getHeight() - 4.0f, 2.0f);
+}
+
+std::vector<std::pair<juce::String, juce::Rectangle<int>>> LaneRow::captions() const
+{
+    return { { "Lvl", level.getBounds() }, { "Pan", pan.getBounds() }, { "Pitch", pitch.getBounds() },
+             { "Cut", cutoff.getBounds() }, { "Decay", decay.getBounds() }, { "Swing", swing.getBounds() },
+             { "Hum", hum.getBounds() }, { "Role", roleBox.getBounds() }, { "Sample (scroll to dig)", slot.getBounds() },
+             { "Steps / rate", lenSlider.getBounds().getUnion (rateBox.getBounds()) } };
 }
 
 void LaneRow::resized()
@@ -632,24 +777,187 @@ void LaneRow::resized()
 
     muteBtn.setBounds (take (22));
     soloBtn.setBounds (take (22, 6));
-    roleBox.setBounds (take (92, 6));
+    roleBox.setBounds (take (90, 4));
+    lockSampleBtn.setBounds (take (18, 2));
     prevBtn.setBounds (take (18, 2));
-    slot.setBounds (take (176, 2).expanded (0, 3));
+    slot.setBounds (take (184, 2).expanded (0, 3));
     nextBtn.setBounds (take (18, 3));
     randBtn.setBounds (take (20, 3));
     folderBtn.setBounds (take (24, 8));
-    lenSlider.setBounds (take (44, 3));
-    rateBox.setBounds (take (64, 6));
-    genBtn.setBounds (take (36, 2));
-    mutBtn.setBounds (take (36, 8));
+    lenSlider.setBounds (take (40, 3));
+    rateBox.setBounds (take (62, 6));
+    lockPatternBtn.setBounds (take (18, 2));
+    genBtn.setBounds (take (34, 2));
+    mutBtn.setBounds (take (34, 8));
 
-    for (auto* k : { &level, &pan, &pitch, &decay, &swing, &hum })
-        k->setBounds (take (30, 1).expanded (0, 4));
+    for (auto* k : { &level, &pan, &pitch, &cutoff, &decay, &swing, &hum })
+        k->setBounds (take (29, 1).expanded (0, 4));
 
     removeBtn.setBounds (r.removeFromRight (20));
     r.removeFromRight (6);
     r.removeFromLeft (6);
     grid.setBounds (r.expanded (0, 4));
+}
+
+//==============================================================================
+LaneDetail::LaneDetail (GrooveboxProcessor& p) : proc (p)
+{
+    for (auto* c : std::initializer_list<juce::Component*> { &title, &fitLabel, &modeBox, &midiChBox, &filterBox, &outBox,
+                                                             &chokeBox, &noteBox, &reso, &attack, &reverseBtn })
+        addAndMakeVisible (c);
+
+    title.setFont (juce::FontOptions (13.5f, juce::Font::bold));
+    fitLabel.setFont (juce::FontOptions (11.5f));
+    fitLabel.setColour (juce::Label::textColourId, kDim);
+    fitLabel.setMinimumHorizontalScale (0.8f);
+
+    modeBox.addItem ("Plays its sample", 1);
+    modeBox.addItem ("Sends notes to an FL channel", 2);
+    modeBox.setTooltip ("FL channel mode: this lane's groove plays one of your FL channels (Sampler, Slicex, any synth) via MIDI out");
+    for (int c = 1; c <= 16; ++c) midiChBox.addItem ("Ch " + juce::String (c), c);
+    midiChBox.setTooltip ("MIDI channel this lane sends on");
+    noteBox.format = [] (int v) { return noteLabel (v); };
+    noteBox.setTooltip ("Note this lane sends (drag or scroll). C5 is FL's default root note");
+
+    filterBox.addItem ("Filter off", 1);
+    filterBox.addItem ("Low-pass", 2);
+    filterBox.addItem ("High-pass", 3);
+    filterBox.addItem ("Band-pass", 4);
+    filterBox.setTooltip ("Lane filter. Cutoff is the Cut knob on the lane (automatable); per-step cutoff darkens individual hits");
+
+    outBox.addItem ("Own output", 1);
+    outBox.addItem ("Main", 2);
+    for (int o = 2; o <= kNumOuts; ++o) outBox.addItem ("Out " + juce::String (o), o + 1);
+    outBox.setTooltip ("Own output = this lane's own mixer track when FL's Auto map outputs is on");
+
+    chokeBox.addItem ("No choke", 1);
+    for (int c = 1; c <= 4; ++c) chokeBox.addItem ("Choke group " + juce::String (c), c + 1);
+    chokeBox.setTooltip ("Lanes in the same choke group cut each other off (open/closed hats)");
+
+    for (auto* k : { &reso, &attack })
+    {
+        k->setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        k->setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
+        k->setRange (0.0, 1.0, 0.001);
+        k->setPopupDisplayEnabled (true, false, nullptr);
+        k->setMouseDragSensitivity (160);
+    }
+    reso.setDoubleClickReturnValue (true, 0.2);
+    attack.setDoubleClickReturnValue (true, 0.0);
+    reso.textFromValueFunction = [] (double v) { return "Resonance " + pct (v); };
+    attack.textFromValueFunction = [] (double v) { return "Attack " + juce::String (juce::roundToInt (v * v * 200.0)) + " ms"; };
+    reso.setTooltip ("Filter resonance");
+    attack.setTooltip ("Fade-in at the start of each hit (softens clicks, makes swells)");
+    reverseBtn.setClickingTogglesState (true);
+    reverseBtn.setTooltip ("Play the sample backwards");
+
+    modeBox.onChange   = [this]
+    {
+        edit ([this] (Lane& l) { l.mode = modeBox.getSelectedId() == 2 ? LaneMode::FLChannel : LaneMode::Sample; });
+        refresh();
+        ++proc.modelVersion; // the lane row shows the mode too
+    };
+    midiChBox.onChange = [this] { edit ([this] (Lane& l) { l.midiChannel = midiChBox.getSelectedId(); }); ++proc.modelVersion; };
+    noteBox.onChange   = [this] (int v) { edit ([v] (Lane& l) { l.midiNote = v; }); ++proc.modelVersion; };
+    filterBox.onChange = [this] { edit ([this] (Lane& l) { l.filter = (FilterType) (filterBox.getSelectedId() - 1); }); };
+    outBox.onChange    = [this] { edit ([this] (Lane& l) { l.out = outBox.getSelectedId() - 2; }); };
+    chokeBox.onChange  = [this] { edit ([this] (Lane& l) { l.choke = chokeBox.getSelectedId() - 1; }); };
+    reso.onValueChange   = [this] { edit ([this] (Lane& l) { l.reso = (float) reso.getValue(); }); };
+    attack.onValueChange = [this] { edit ([this] (Lane& l) { l.attack = (float) attack.getValue(); }); };
+    reverseBtn.onClick   = [this] { edit ([this] (Lane& l) { l.reverse = reverseBtn.getToggleState(); }); };
+}
+
+template <typename Fn>
+void LaneDetail::edit (Fn&& fn)
+{
+    const juce::SpinLock::ScopedLockType sl (proc.lock);
+    fn (proc.lanes[(size_t) lane]);
+}
+
+void LaneDetail::setLane (int li)
+{
+    lane = juce::jlimit (0, kMaxLanes - 1, li);
+    refresh();
+}
+
+void LaneDetail::refresh()
+{
+    const auto& l = proc.lanes[(size_t) lane];
+    const auto n = juce::dontSendNotification;
+
+    title.setText ("Lane " + juce::String (lane + 1) + ": " + (l.name.isEmpty() ? juce::String (roleName (l.role)) : l.name),
+                   n);
+    title.setColour (juce::Label::textColourId, roleColour (l.role));
+
+    juce::String info;
+    if (l.mode == LaneMode::FLChannel)
+        info = "Route: Groovebox wrapper MIDI output port = your channel's MIDI input port";
+    else if (l.sample == nullptr)
+        info = "No sample yet";
+    else
+    {
+        const auto fit = proc.laneFit (lane);
+        info = fit.score < 0 ? juce::String ("Listening to this sample...")
+                             : "Fit " + juce::String (fit.score) + ": " + fit.reason;
+    }
+    fitLabel.setText (info, n);
+
+    const bool flMode = l.mode == LaneMode::FLChannel;
+    modeBox.setSelectedId (flMode ? 2 : 1, n);
+    midiChBox.setSelectedId (l.midiChannel, n);
+    noteBox.setValue (l.midiNote, false);
+    filterBox.setSelectedId ((int) l.filter + 1, n);
+    outBox.setSelectedId (l.out + 2, n);
+    chokeBox.setSelectedId (l.choke + 1, n);
+    reso.setValue (l.reso, n);
+    attack.setValue (l.attack, n);
+    reverseBtn.setToggleState (l.reverse, n);
+
+    midiChBox.setEnabled (flMode);
+    noteBox.setEnabled (flMode);
+    for (auto* c : std::initializer_list<juce::Component*> { &filterBox, &reso, &attack, &reverseBtn, &outBox, &chokeBox })
+        c->setEnabled (! flMode);
+    noteBox.repaint();
+
+    for (auto* k : { &reso, &attack })
+        k->setColour (juce::Slider::rotarySliderFillColourId, roleColour (l.role));
+    repaint();
+}
+
+void LaneDetail::paint (juce::Graphics& g)
+{
+    g.setColour (kPanel);
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+
+    g.setColour (kDim);
+    g.setFont (juce::FontOptions (10.5f));
+    const std::pair<juce::Component*, const char*> caps[] = {
+        { &modeBox, "Plays" }, { &midiChBox, "MIDI" }, { &noteBox, "Note" }, { &filterBox, "Filter" },
+        { &reso, "Res" }, { &attack, "Attack" }, { &outBox, "Output" }, { &chokeBox, "Choke" }
+    };
+    for (auto [c, label] : caps)
+        g.drawText (label, c->getX() - 4, 4, c->getWidth() + 8, 13, juce::Justification::centredLeft, false);
+}
+
+void LaneDetail::resized()
+{
+    auto r = getLocalBounds().reduced (10, 6);
+    auto info = r.removeFromLeft (300);
+    title.setBounds (info.removeFromTop (22));
+    fitLabel.setBounds (info.removeFromTop (22));
+    r.removeFromLeft (10);
+
+    auto controls = r.withTrimmedTop (14);
+    auto take = [&controls] (int w, int gap = 8) { auto a = controls.removeFromLeft (w); controls.removeFromLeft (gap); return a.withSizeKeepingCentre (w, 26); };
+    modeBox.setBounds (take (210));
+    midiChBox.setBounds (take (70, 4));
+    noteBox.setBounds (take (52, 16));
+    filterBox.setBounds (take (100, 4));
+    reso.setBounds (take (34, 2).expanded (0, 4));
+    attack.setBounds (take (34, 10).expanded (0, 4));
+    reverseBtn.setBounds (take (70, 16));
+    outBox.setBounds (take (110, 4));
+    chokeBox.setBounds (take (124));
 }
 
 //==============================================================================
@@ -667,7 +975,7 @@ void MidiDragButton::mouseDrag (const juce::MouseEvent& e)
 
 //==============================================================================
 GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
-    : AudioProcessorEditor (&p), proc (p), dragMidiBtn (p)
+    : AudioProcessorEditor (&p), proc (p), dragMidiBtn (p), detail (p)
 {
     setLookAndFeel (&look);
 
@@ -679,18 +987,20 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     byline.setFont (juce::FontOptions (11.5f));
     byline.setColour (juce::Label::textColourId, kDim);
     byline.setBorderSize ({ 0, 0, 0, 0 });
-    addAndMakeVisible (byline);
     status.setColour (juce::Label::textColourId, kDim);
     status.setFont (juce::FontOptions (12.0f));
-    status.setText ("Drop a folder on a lane, or use Library... to map a whole sample library. Right-click a step grid for more.",
+    status.setText ("Drop a folder on a lane, or use Library... to map a whole sample library. Click a lane for its settings; right-click a step grid for more.",
                     juce::dontSendNotification);
     bpmLabel.setColour (juce::Label::textColourId, kDim);
     bpmLabel.setJustificationType (juce::Justification::centredRight);
 
-    for (auto* c : std::initializer_list<juce::Component*> { &title, &status, &bpmLabel, &libraryBtn, &shuffleBtn, &generateBtn,
-                                                             &mutateBtn, &previewBtn, &seqBtn, &saveMidiBtn, &dragMidiBtn,
-                                                             &genreBox, &modeBox, &barsBox, &density, &variation, &irregular,
-                                                             &mutateAmt, &swingScale, &humScale, &master, &viewport })
+    proc.editorEverOpened = true;
+
+    for (auto* c : std::initializer_list<juce::Component*> { &title, &byline, &status, &bpmLabel, &setupsBtn, &libraryBtn, &shuffleBtn,
+                                                             &fitFilterBtn, &generateBtn, &mutateBtn, &previewBtn, &seqBtn,
+                                                             &saveMidiBtn, &dragMidiBtn, &genreBox, &modeBox, &barsBox,
+                                                             &density, &variation, &irregular, &mutateAmt, &swingScale,
+                                                             &humScale, &master, &viewport, &detail })
         addAndMakeVisible (c);
 
     generateBtn.setColour (juce::TextButton::buttonColourId, kAccent.withAlpha (0.85f));
@@ -698,17 +1008,20 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
 
     for (int g = 0; g < NumGenres; ++g)
         genreBox.addItem (genreName (g), g + 1);
-    genreBox.addSeparator();
-    genreBox.onChange = [this] { proc.gen.genre = genreBox.getSelectedId() - 1; };
-    genreBox.setTooltip ("Genre for the generator. Hybrid gives every lane a different genre; Free ignores genre rules");
+    genreBox.onChange = [this]
+    {
+        proc.gen.genre = genreBox.getSelectedId() - 1;
+        for (auto& r : rows) r->repaintSlot(); // fit ratings depend on the genre
+        detail.refresh();
+    };
+    genreBox.setTooltip ("Genre for the generator and the fit ratings. Hybrid gives every lane a different genre; Free ignores genre rules");
 
-    modeBox.addItem ("Draw: Steps", 1);
-    modeBox.addItem ("Draw: Velocity", 2);
-    modeBox.addItem ("Draw: Probability", 3);
-    modeBox.addItem ("Draw: Nudge", 4);
-    modeBox.addItem ("Draw: Ratchet", 5);
+    const char* modes[] = { "Draw: Steps", "Draw: Velocity", "Draw: Probability", "Draw: Nudge", "Draw: Ratchet",
+                            "Draw: Pitch", "Draw: Pan", "Draw: Cutoff", "Draw: Sample start" };
+    for (int i = 0; i < 9; ++i)
+        modeBox.addItem (modes[i], i + 1);
     modeBox.setSelectedId (1, juce::dontSendNotification);
-    modeBox.setTooltip ("What clicking and dragging on the step grids edits");
+    modeBox.setTooltip ("What clicking and dragging on the step grids edits, like FL's graph editor");
     modeBox.onChange = [this]
     {
         editMode = (EditMode) (modeBox.getSelectedId() - 1);
@@ -729,8 +1042,6 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     irregular.setTooltip ("Chance that a lane gets an odd length, odd rate and Euclidean placement");
     mutateAmt.setTooltip ("How much Mutate changes the current groove");
 
-    swingScale.textFromValueFunction = [] (double v) { return "Swing x" + pct (v); };
-    humScale.textFromValueFunction   = [] (double v) { return "Humanize x" + pct (v); };
     for (auto* s : { &swingScale, &humScale })
     {
         s->setSliderStyle (juce::Slider::LinearBar);
@@ -740,7 +1051,6 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     humScale.setTooltip ("Scales every lane's humanize (automatable)");
     swingAtt = std::make_unique<SliderAtt> (proc.apvts, "swing", swingScale);
     humAtt   = std::make_unique<SliderAtt> (proc.apvts, "humanize", humScale);
-    // The attachments install the parameter's own text; put ours back.
     swingScale.textFromValueFunction = [] (double v) { return "Swing x" + pct (v); };
     humScale.textFromValueFunction   = [] (double v) { return "Humanize x" + pct (v); };
     swingScale.updateText();
@@ -753,19 +1063,27 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     masterAtt = std::make_unique<SliderAtt> (proc.apvts, "master", master);
 
     seqBtn.setClickingTogglesState (true);
-    seqBtn.setTooltip ("Internal sequencer on/off. Turn off to play Groovebox only from MIDI notes (C1 = lane 1)");
+    seqBtn.setTooltip ("Internal sequencer on/off. Turn off to play Groovebox only from MIDI notes (C3 = lane 1 in FL's naming)");
     seqAtt = std::make_unique<ButtonAtt> (proc.apvts, "seq", seqBtn);
 
     previewBtn.setClickingTogglesState (true);
     previewBtn.setTooltip ("Play the groove without starting FL's transport");
     previewBtn.onClick = [this] { proc.previewPlaying = previewBtn.getToggleState(); };
 
-    generateBtn.setTooltip ("New groove for all lanes");
-    mutateBtn.setTooltip ("Evolve the current groove instead of replacing it");
-    shuffleBtn.setTooltip ("Pick a random sample in every lane");
+    fitFilterBtn.setClickingTogglesState (true);
+    fitFilterBtn.setToggleState (proc.fitFilter, juce::dontSendNotification);
+    fitFilterBtn.setTooltip ("When on, scrolling skips samples rated as a poor fit for the lane's role and genre");
+    fitFilterBtn.onClick = [this] { proc.fitFilter = fitFilterBtn.getToggleState(); };
+
+    generateBtn.setTooltip ("New groove for all lanes (pattern-locked lanes are kept)");
+    mutateBtn.setTooltip ("Evolve the current groove instead of replacing it (pattern-locked lanes are kept)");
+    shuffleBtn.setTooltip ("Pick a new sample in every lane, favouring good fits (sample-locked lanes are kept)");
     libraryBtn.setTooltip ("Pick your sample library root; subfolders are matched to lanes by name (kicks, hats, perc...)");
     dragMidiBtn.setTooltip ("Drag onto FL's playlist, piano roll or a channel to drop the groove as MIDI");
     saveMidiBtn.setTooltip ("Save the groove as a .mid file in Documents/Groovebox/MIDI");
+
+    setupsBtn.setTooltip ("Save this setup, load a saved one, or go back to your last session");
+    setupsBtn.onClick = [this] { showSetupsMenu(); };
 
     generateBtn.onClick = [this] { proc.generateAll(); };
     mutateBtn.onClick   = [this] { proc.mutateAll(); };
@@ -793,7 +1111,7 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
                                   for (int i = 0; i < proc.numLanes; ++i)
                                       if (proc.lanes[(size_t) i].sample != nullptr) ++mapped;
                                   status.setText ("Mapped " + juce::String (mapped) + " lanes from " + dir.getFileName()
-                                                      + ". Scroll a sample name to dig, Generate for a groove.",
+                                                      + ". Groovebox is listening to the samples to rate how well they fit.",
                                                   juce::dontSendNotification);
                               });
     };
@@ -805,8 +1123,8 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     viewport.setScrollBarThickness (10);
 
     setResizable (true, true);
-    setResizeLimits (1100, 480, 2400, 1600);
-    setSize (1400, 800);
+    setResizeLimits (1150, 560, 2400, 1600);
+    setSize (1440, 860);
 
     syncRows();
     startTimerHz (30);
@@ -815,7 +1133,80 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
 GrooveboxEditor::~GrooveboxEditor()
 {
     stopTimer();
+    proc.autosave();
     setLookAndFeel (nullptr);
+}
+
+void GrooveboxEditor::showSetupsMenu()
+{
+    juce::PopupMenu m;
+    m.addItem (1, "Save setup as...");
+    m.addItem (2, "Load last session", GrooveboxProcessor::lastSessionFile().existsAsFile());
+    m.addSeparator();
+
+    auto saved = GrooveboxProcessor::setupsFolder().findChildFiles (juce::File::findFiles, false, "*.gbx");
+    std::sort (saved.begin(), saved.end(), [] (const juce::File& a, const juce::File& b)
+               { return a.getLastModificationTime() > b.getLastModificationTime(); });
+    if (saved.size() > 40) saved.removeRange (40, saved.size() - 40);
+
+    if (saved.isEmpty())
+        m.addItem (-1, "(no saved setups yet)", false);
+    for (int i = 0; i < saved.size(); ++i)
+        m.addItem (100 + i, saved[i].getFileNameWithoutExtension());
+
+    m.addSeparator();
+    m.addItem (3, "Load setup from file...");
+    m.addItem (4, "Open setups folder");
+
+    juce::Component::SafePointer<GrooveboxEditor> self (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&setupsBtn), [self, saved] (int r)
+    {
+        if (self == nullptr || r == 0) return;
+        auto& p = self->proc;
+        auto say = [self] (const juce::String& t) { if (self != nullptr) self->status.setText (t, juce::dontSendNotification); };
+
+        if (r == 1)
+        {
+            self->chooser = std::make_unique<juce::FileChooser> ("Save Groovebox setup",
+                                                                 GrooveboxProcessor::setupsFolder().getChildFile ("My setup.gbx"), "*.gbx");
+            self->chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
+                                        [self, say] (const juce::FileChooser& fc)
+                                        {
+                                            if (self == nullptr) return;
+                                            auto f = fc.getResult();
+                                            if (f == juce::File()) return;
+                                            f = f.withFileExtension ("gbx");
+                                            say (self->proc.saveSetup (f) ? "Saved setup \"" + f.getFileNameWithoutExtension() + "\""
+                                                                          : juce::String ("Couldn't save the setup there"));
+                                        });
+        }
+        else if (r == 2)
+        {
+            say (p.loadSetup (GrooveboxProcessor::lastSessionFile()) ? "Loaded your last session" : "Couldn't read the last session");
+        }
+        else if (r == 3)
+        {
+            self->chooser = std::make_unique<juce::FileChooser> ("Load Groovebox setup", GrooveboxProcessor::setupsFolder(), "*.gbx");
+            self->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                        [self, say] (const juce::FileChooser& fc)
+                                        {
+                                            if (self == nullptr) return;
+                                            const auto f = fc.getResult();
+                                            if (! f.existsAsFile()) return;
+                                            say (self->proc.loadSetup (f) ? "Loaded setup \"" + f.getFileNameWithoutExtension() + "\""
+                                                                          : juce::String ("That file isn't a Groovebox setup"));
+                                        });
+        }
+        else if (r == 4)
+        {
+            GrooveboxProcessor::setupsFolder().revealToUser();
+        }
+        else if (r >= 100 && r - 100 < saved.size())
+        {
+            const auto f = saved[r - 100];
+            say (p.loadSetup (f) ? "Loaded setup \"" + f.getFileNameWithoutExtension() + "\"" : juce::String ("Couldn't read that setup"));
+        }
+    });
 }
 
 void GrooveboxEditor::setupBar (juce::Slider& s, const juce::String& name, double def, std::function<void (float)> setter)
@@ -830,12 +1221,21 @@ void GrooveboxEditor::setupBar (juce::Slider& s, const juce::String& name, doubl
     s.updateText();
 }
 
+void GrooveboxEditor::selectLane (int li)
+{
+    if (li == selectedLane) return;
+    selectedLane = li;
+    detail.setLane (li);
+    for (auto& r : rows) r->repaint();
+}
+
 void GrooveboxEditor::syncRows()
 {
     const int nl = proc.numLanes.load();
     while ((int) rows.size() < nl)
     {
-        rows.push_back (std::make_unique<LaneRow> (proc, editMode));
+        rows.push_back (std::make_unique<LaneRow> (proc, editMode, selectedLane));
+        rows.back()->onSelect = [this] (int li) { selectLane (li); };
         laneList.addAndMakeVisible (*rows.back());
     }
     while ((int) rows.size() > nl)
@@ -844,8 +1244,12 @@ void GrooveboxEditor::syncRows()
     for (int i = 0; i < nl; ++i)
         rows[(size_t) i]->setLane (i);
 
+    selectedLane = juce::jlimit (0, nl - 1, selectedLane);
+    detail.setLane (selectedLane);
+
     genreBox.setSelectedId (proc.gen.genre + 1, juce::dontSendNotification);
     barsBox.setSelectedId (proc.exportBars, juce::dontSendNotification);
+    fitFilterBtn.setToggleState (proc.fitFilter, juce::dontSendNotification);
     density.setValue (proc.gen.density, juce::dontSendNotification);
     variation.setValue (proc.gen.variation, juce::dontSendNotification);
     irregular.setValue (proc.gen.irregular, juce::dontSendNotification);
@@ -886,9 +1290,24 @@ void GrooveboxEditor::timerCallback()
     for (auto& r : rows)
         r->tick();
 
-    static int counter = 0;
-    if (++counter % 15 == 0)
-        bpmLabel.setText (juce::String (proc.lastBpm.load(), 1) + " BPM", juce::dontSendNotification);
+    if (++tickCount % 15 == 0)
+    {
+        if (proc.analyzer.version.load() != seenAnalysis)
+        {
+            seenAnalysis = proc.analyzer.version.load();
+            for (auto& r : rows) r->repaintSlot();
+            detail.refresh();
+        }
+
+        const int pending = proc.analyzer.pending();
+        juce::String s = juce::String (proc.lastBpm.load(), 1) + " BPM";
+        if (pending > 0) s = "listening to " + juce::String (pending) + " samples  |  " + s;
+        if (proc.ioBusy.load() > 0) s = "scanning folders...  |  " + s;
+        bpmLabel.setText (s, juce::dontSendNotification);
+    }
+
+    if (tickCount % 150 == 0) // every ~5 s: keep the last session safe in case of a crash
+        proc.autosave();
 }
 
 void GrooveboxEditor::paint (juce::Graphics& g)
@@ -903,19 +1322,12 @@ void GrooveboxEditor::paint (juce::Graphics& g)
         g.setColour (kDim);
         g.setFont (juce::FontOptions (10.5f));
         const auto origin = viewport.getPosition();
-        auto* row = rows.front().get();
-        const char* knobNames[] = { "Lvl", "Pan", "Pitch", "Decay", "Swing", "Hum" };
-        int k = 0;
-        for (auto* c : row->getChildren())
+        for (const auto& [name, b] : rows.front()->captions())
         {
-            if (auto* s = dynamic_cast<juce::Slider*> (c); s != nullptr && s->getSliderStyle() != juce::Slider::LinearBar && k < 6)
-            {
-                g.drawText (knobNames[k++], s->getX() + origin.x - 6, 74, s->getWidth() + 12, 14, juce::Justification::centred);
-            }
+            const bool knob = b.getWidth() < 40;
+            g.drawText (name, origin.x + b.getX() - (knob ? 6 : 0), 74, b.getWidth() + (knob ? 12 : 120), 14,
+                        knob ? juce::Justification::centred : juce::Justification::left, false);
         }
-        g.drawText ("Lane / role", origin.x + 8, 74, 120, 14, juce::Justification::left);
-        g.drawText ("Sample (scroll to dig)", origin.x + 152, 74, 200, 14, juce::Justification::left);
-        g.drawText ("Steps / rate", origin.x + 418, 74, 120, 14, juce::Justification::left);
     }
 }
 
@@ -926,9 +1338,11 @@ void GrooveboxEditor::resized()
     auto row1 = r.removeFromTop (38).reduced (10, 6);
     title.setBounds (row1.removeFromLeft (102));
     byline.setBounds (row1.removeFromLeft (52).withTrimmedTop (5));
+    setupsBtn.setBounds (row1.removeFromLeft (66)); row1.removeFromLeft (4);
     libraryBtn.setBounds (row1.removeFromLeft (86)); row1.removeFromLeft (4);
-    shuffleBtn.setBounds (row1.removeFromLeft (118)); row1.removeFromLeft (16);
-    genreBox.setBounds (row1.removeFromLeft (180)); row1.removeFromLeft (4);
+    shuffleBtn.setBounds (row1.removeFromLeft (118)); row1.removeFromLeft (4);
+    fitFilterBtn.setBounds (row1.removeFromLeft (76)); row1.removeFromLeft (16);
+    genreBox.setBounds (row1.removeFromLeft (170)); row1.removeFromLeft (4);
     generateBtn.setBounds (row1.removeFromLeft (88)); row1.removeFromLeft (4);
     mutateBtn.setBounds (row1.removeFromLeft (70)); row1.removeFromLeft (4);
     mutateAmt.setBounds (row1.removeFromLeft (120)); row1.removeFromLeft (16);
@@ -945,14 +1359,15 @@ void GrooveboxEditor::resized()
     row2.removeFromLeft (12);
     swingScale.setBounds (row2.removeFromLeft (130)); row2.removeFromLeft (4);
     humScale.setBounds (row2.removeFromLeft (150)); row2.removeFromLeft (16);
-    modeBox.setBounds (row2.removeFromLeft (150)); row2.removeFromLeft (16);
+    modeBox.setBounds (row2.removeFromLeft (160)); row2.removeFromLeft (16);
     barsBox.setBounds (row2.removeFromLeft (86)); row2.removeFromLeft (4);
     dragMidiBtn.setBounds (row2.removeFromLeft (92)); row2.removeFromLeft (4);
     saveMidiBtn.setBounds (row2.removeFromLeft (84));
-    bpmLabel.setBounds (row2.removeFromRight (90));
+    bpmLabel.setBounds (row2.removeFromRight (260));
 
     r.removeFromTop (18); // captions
     status.setBounds (r.removeFromBottom (26).reduced (10, 2));
+    detail.setBounds (r.removeFromBottom (70).reduced (8, 4));
     viewport.setBounds (r.reduced (8, 2));
     layoutLaneList();
     repaint();
