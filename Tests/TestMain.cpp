@@ -247,6 +247,7 @@ int main (int argc, char** argv)
     // 12. One output per lane
     {
         p.enableAllBuses();
+        p.separateOuts = true;
         p.prepareToPlay (48000.0, 512);
         CHECK (p.getTotalNumOutputChannels() == 64, "32 stereo outputs available (" + juce::String (p.getTotalNumOutputChannels()) + " channels)");
         for (int i = 0; i < p.numLanes; ++i) p.lanes[(size_t) i].mute = (i != 1);
@@ -674,6 +675,27 @@ int main (int argc, char** argv)
         CHECK (ons == 5 && c5 && g5, "one note per hit (ratchet = 2 notes) on C5, step pitch moves the note (" + juce::String (ons) + " notes)");
         const auto all = p.bakeAllLaneSamples();
         CHECK (all.size() >= 3, "all lanes baked for one drag (" + juce::String (all.size()) + " files)");
+    }
+
+    // 23. Duplicate a lane / separate outputs off by default
+    {
+        GrooveboxProcessor fresh;
+        CHECK (! fresh.separateOuts.load(), "lanes play on the main output by default (safe in existing projects)");
+
+        const int before = p.numLanes.load();
+        const auto src = laneString (p.lanes[0]);
+        const auto file = p.lanes[0].sample != nullptr ? p.lanes[0].sample->file : juce::File();
+        p.apvts.getParameter (GrooveboxProcessor::paramId (0, "pitch"))->setValueNotifyingHost (0.7f);
+        const auto nextName = p.lanes[1].name;
+        p.checkpoint();
+        const int c = p.duplicateLane (0);
+        p.checkpoint();
+        CHECK (c == 1 && p.numLanes.load() == before + 1 && laneString (p.lanes[1]) == src
+               && p.lanes[1].sample != nullptr && p.lanes[1].sample->file == file && p.lanes[2].name == nextName,
+               "duplicate: copy right below with the same pattern and sample, others move down");
+        CHECK (std::abs (p.apvts.getParameter (GrooveboxProcessor::paramId (1, "pitch"))->getValue() - 0.7f) < 0.001f,
+               "duplicate keeps the knobs (pitch)");
+        CHECK (p.undo() && p.numLanes.load() == before && p.lanes[1].name == nextName, "Ctrl+Z undoes the duplicate");
     }
 
     // 22. Scrubbing the song

@@ -336,7 +336,7 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     for (int i = 0; i < kNumOuts; ++i)
     {
         auto* bus = getBus (false, i);
-        const bool on = bus != nullptr && bus->isEnabled() && bus->getNumberOfChannels() >= 2;
+        const bool on = (i == 0 || separateOuts.load()) && bus != nullptr && bus->isEnabled() && bus->getNumberOfChannels() >= 2;
         const int idx = on ? getChannelIndexInProcessBlockBuffer (false, i, 0) : mainIdx;
         outL[(size_t) i] = buffer.getWritePointer (idx);
         outR[(size_t) i] = buffer.getWritePointer (idx + 1);
@@ -1121,6 +1121,37 @@ void GrooveboxProcessor::addLane()
     ++modelVersion;
 }
 
+int GrooveboxProcessor::duplicateLane (int li)
+{
+    const int nl = numLanes;
+    if (li < 0 || li >= nl || nl >= kMaxLanes) return -1;
+
+    Lane dup = lanes[(size_t) li]; // the message thread is the only writer, so reading without the lock is safe
+    dup.solo = false;
+    if (! dup.name.endsWith (" copy")) dup.name << " copy";
+    {
+        const juce::SpinLock::ScopedLockType sl (lock);
+        for (int j = nl; j > li + 1; --j)
+            lanes[(size_t) j] = std::move (lanes[(size_t) j - 1]);
+        lanes[(size_t) li + 1] = std::move (dup);
+        numLanes = nl + 1;
+        // The copy plays in the same song sections as the original.
+        const juce::uint32 below = (1u << (li + 1)) - 1u;
+        for (auto& m : songMask)
+        {
+            const juce::uint32 bit = (m >> li) & 1u;
+            m = (m & below) | ((m & ~below) << 1) | (bit << (li + 1));
+        }
+    }
+    for (auto& t : laneToken) ++t; // pending folder scans refer to old lane positions
+
+    for (int j = nl; j > li + 1; --j)
+        copyLaneParams (j - 1, j);
+    copyLaneParams (li, li + 1);
+    ++modelVersion;
+    return li + 1;
+}
+
 void GrooveboxProcessor::removeLane (int li)
 {
     const int nl = numLanes;
@@ -1525,6 +1556,7 @@ std::unique_ptr<juce::XmlElement> GrooveboxProcessor::createStateXml()
     }
 
     const juce::SpinLock::ScopedLockType sl (lock);
+    xml.setAttribute ("separateOuts", separateOuts.load());
     xml.setAttribute ("grooveAmount", grooveAmount);
     xml.setAttribute ("grooveFile", grooveFile.getFullPathName());
     xml.setAttribute ("grooveForcedBpm", grooveForcedBpm);
@@ -1599,6 +1631,7 @@ void GrooveboxProcessor::applyStateXml (const juce::XmlElement& xmlRef)
     gen.bars      = juce::jlimit (1, 64, xml->getIntAttribute ("bars", 1));
     previewBpm    = juce::jlimit (40.0, 300.0, xml->getDoubleAttribute ("previewBpm", genreBpm (gen.genre)));
     songMode      = xml->getBoolAttribute ("songMode", false);
+    separateOuts  = xml->getBoolAttribute ("separateOuts", false);
     pianoRollMode = false; // the one-channel piano roll workflow was replaced by per-lane export in 0.6
     songSections.clear();
     {

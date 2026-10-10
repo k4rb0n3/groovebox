@@ -151,7 +151,7 @@ public:
     void repaintSlot() { slot.repaint(); }
     void repaintGrid() { grid.repaint(); }
 
-    std::function<void (int)> onSelect;
+    std::function<void (int)> onSelect, onDuplicate;
     std::function<void()> onEdited;
     std::vector<std::pair<juce::String, juce::Rectangle<int>>> captions() const;
 
@@ -165,7 +165,7 @@ private:
     bool pianoRoll = false;
 
     juce::TextButton muteBtn { "M" }, soloBtn { "S" }, prevBtn { "<" }, nextBtn { ">" },
-                     randBtn { "?" }, folderBtn { "..." }, genBtn { "Gen" }, mutBtn { "Mut" }, removeBtn { "x" };
+                     randBtn { "?" }, folderBtn { "..." }, genBtn { "Gen" }, mutBtn { "Mut" }, removeBtn { "x" }, dupBtn { "+" };
     LockButton lockSampleBtn, lockPatternBtn;
     juce::ComboBox roleBox, rateBox;
     NumberBox lenSlider { 1, kMaxSteps, 16 };
@@ -209,6 +209,7 @@ public:
     void paint (juce::Graphics&) override;
     void tick();
     std::function<void()> onEdited;
+    std::function<void (int)> onDuplicate;
     std::function<void (const juce::String&)> onStatus;
 
 private:
@@ -220,7 +221,7 @@ private:
     juce::Label title, fitLabel, hint;
     juce::ComboBox filterBox, outBox, chokeBox;
     juce::Slider reso, attack;
-    juce::TextButton reverseBtn { "Reverse" }, mixerHelpBtn { "How?" };
+    juce::TextButton reverseBtn { "Reverse" }, mixerHelpBtn { "How?" }, separateBtn { "Separate mixer tracks" }, dupLaneBtn { "Duplicate lane" };
     FileDragButton sampleDrag { "Sample  >  Channel Rack" }, notesDrag { "Notes  >  Piano roll" }, allDrag { "All lanes  >  Channel Rack" };
     StepGrid steps;
     std::vector<std::unique_ptr<ParamStrip>> strips;
@@ -359,6 +360,7 @@ private:
     void syncRows();
     void layoutLaneList();
     void selectLane (int li);
+    void duplicateSelected (int lane = -1);
     void setPage (int p);
     void updatePageLabel();
     void repaintGrids();

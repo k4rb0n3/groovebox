@@ -99,6 +99,10 @@ public:
     // (C3 = lane 1 ...). Each note picks up the step settings (pitch, pan, cutoff, start) of the step it sits on.
     std::atomic<bool> pianoRollMode { false };
 
+    // Off (default): every lane plays on Groovebox's main output, so loading Groovebox never
+    // disturbs a project's mixer. On: lanes use their own outputs (with FL's Auto map outputs).
+    std::atomic<bool> separateOuts { false };
+
     //== Groove from a reference (written under `lock`) ===============================
     cg::Groove groove;               // feel extracted from a reference loop or track
     float grooveAmount = 0.8f;       // 0..1, how far lanes move towards it
@@ -140,6 +144,7 @@ public:
 
     void addLane();
     void removeLane (int lane);
+    int  duplicateLane (int lane);     // copy of the lane with everything (sample, pattern, knobs) right below it; returns its index
     void audition (int lane) { if (lane >= 0 && lane < cg::kMaxLanes) auditionFlag[(size_t) lane] = true; }
 
     juce::File exportMidi();

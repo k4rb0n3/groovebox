@@ -733,7 +733,7 @@ void SampleSlot::filesDropped (const juce::StringArray& files, int, int)
 LaneRow::LaneRow (GrooveboxProcessor& p, ViewState& v)
     : proc (p), view (v), slot (p), grid (p, v)
 {
-    for (auto* b : { &muteBtn, &soloBtn, &prevBtn, &nextBtn, &randBtn, &folderBtn, &genBtn, &mutBtn, &removeBtn })
+    for (auto* b : { &muteBtn, &soloBtn, &prevBtn, &nextBtn, &randBtn, &folderBtn, &genBtn, &mutBtn, &removeBtn, &dupBtn })
         addAndMakeVisible (b);
     for (auto* c : { &roleBox, &rateBox })
         addAndMakeVisible (c);
@@ -761,6 +761,7 @@ LaneRow::LaneRow (GrooveboxProcessor& p, ViewState& v)
     genBtn.setTooltip ("Generate a new pattern for this lane only");
     mutBtn.setTooltip ("Mutate this lane's pattern");
     removeBtn.setTooltip ("Remove lane");
+    dupBtn.setTooltip ("Duplicate lane: a copy with the same sample, pattern and settings right below (Ctrl+D)");
     roleBox.setTooltip ("Role: tells the generator and the fit rating what this lane is");
     rateBox.setTooltip ("Step rate. Mix rates across lanes for polyrhythm");
     lenSlider.setTooltip ("Lane length: drag up/down or scroll. Up to 64 steps it moves by 1, beyond that by whole bars (up to 64 bars)");
@@ -825,6 +826,11 @@ LaneRow::LaneRow (GrooveboxProcessor& p, ViewState& v)
                               });
     };
 
+    dupBtn.onClick = [this]
+    {
+        juce::Component::SafePointer<LaneRow> self (this);
+        juce::MessageManager::callAsync ([self] { if (self != nullptr && self->onDuplicate) self->onDuplicate (self->lane); });
+    };
     removeBtn.onClick = [this]
     {
         juce::Component::SafePointer<LaneRow> self (this);
@@ -1037,6 +1043,8 @@ void LaneRow::resized()
         k->setBounds (take (29, 1).expanded (0, 4));
 
     removeBtn.setBounds (r.removeFromRight (20));
+    r.removeFromRight (2);
+    dupBtn.setBounds (r.removeFromRight (20));
     r.removeFromRight (6);
     r.removeFromLeft (6);
     grid.setBounds (r.expanded (0, 4));
@@ -1047,7 +1055,7 @@ LaneEditor::LaneEditor (GrooveboxProcessor& p, ViewState& v) : proc (p), view (v
 {
     for (auto* c : std::initializer_list<juce::Component*> { &title, &fitLabel, &hint, &filterBox, &outBox, &chokeBox,
                                                              &reso, &attack, &reverseBtn, &steps, &mixerHelpBtn,
-                                                             &sampleDrag, &notesDrag, &allDrag })
+                                                             &sampleDrag, &notesDrag, &allDrag, &separateBtn, &dupLaneBtn })
         addAndMakeVisible (c);
 
     for (int i = 0; i < (int) Param::Count; ++i)
@@ -1111,6 +1119,18 @@ LaneEditor::LaneEditor (GrooveboxProcessor& p, ViewState& v) : proc (p), view (v
         if (onStatus) onStatus ("Drop on FL's Channel Rack: " + juce::String (f.size()) + " new channels. Then click each lane here and drag its notes into its channel's piano roll.");
     };
 
+    separateBtn.setClickingTogglesState (true);
+    separateBtn.setTooltip ("Off: all lanes play on Groovebox's one mixer track (safe in any project). "
+                            "On: each lane plays on its own output; then click Auto map outputs in FL once (click How?)");
+    separateBtn.onClick = [this]
+    {
+        proc.separateOuts = separateBtn.getToggleState();
+        if (onStatus) onStatus (proc.separateOuts.load() ? "Separate mixer tracks on. In FL: plugin options (top left) > Processing > Auto map outputs, once."
+                                                         : "All lanes on Groovebox's main mixer track again.");
+        refresh();
+    };
+    dupLaneBtn.setTooltip ("Copy this lane with its sample, pattern and every setting, right below it (Ctrl+D)");
+    dupLaneBtn.onClick = [this] { if (onDuplicate) onDuplicate (lane); };
     mixerHelpBtn.setTooltip ("How to give every lane its own FL mixer track");
     mixerHelpBtn.onClick = [this] { showMixerHelp(); };
 
@@ -1162,6 +1182,7 @@ void LaneEditor::showMixerHelp()
 {
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Each lane on its own mixer track",
         "While lanes play inside Groovebox:\n"
+        "0. Turn on Separate mixer tracks here (off by default, so Groovebox never disturbs an existing project's mixer).\n"
         "1. Click the small gear/arrow at the top left of Groovebox's window (the FL plugin wrapper) and open the Processing tab.\n"
         "2. Click \"Auto map outputs\". FL gives each Groovebox output its own mixer track.\n"
         "3. Here, Mixer track \"Own\" means lane 1 goes to the first of those tracks, lane 2 to the second, and so on. "
@@ -1203,6 +1224,8 @@ void LaneEditor::refresh()
     outBox.addItem ("Main (with lane 1)", 2);
     for (int o = 2; o <= kNumOuts; ++o) outBox.addItem ("Same as lane " + juce::String (o) + " (out " + juce::String (o) + ")", o + 1);
     outBox.setSelectedId (l.out + 2, n);
+    separateBtn.setToggleState (proc.separateOuts.load(), n);
+    outBox.setEnabled (proc.separateOuts.load());
     sampleDrag.setEnabled (l.sample != nullptr);
     chokeBox.setSelectedId (l.choke + 1, n);
     reso.setValue (l.reso, n);
@@ -1266,7 +1289,12 @@ void LaneEditor::resized()
     mixerHelpBtn.setBounds (row2.removeFromLeft (44));
     row2.removeFromLeft (8);
     chokeBox.setBounds (row2);
-    left.removeFromTop (20);
+    left.removeFromTop (4);
+    auto rowS = left.removeFromTop (24);
+    separateBtn.setBounds (rowS.removeFromLeft (170));
+    rowS.removeFromLeft (8);
+    dupLaneBtn.setBounds (rowS);
+    left.removeFromTop (18);
     auto row3 = left.removeFromTop (28);
     sampleDrag.setBounds (row3.removeFromLeft (row3.getWidth() / 2 - 3));
     row3.removeFromLeft (6);
@@ -1471,7 +1499,7 @@ HelpOverlay::HelpOverlay()
     };
 
     h ("Shortcuts");
-    p ("Ctrl+Z undo, Ctrl+Y (or Ctrl+Shift+Z) redo. Ctrl+S save setup.\n"
+    p ("Ctrl+Z undo, Ctrl+Y (or Ctrl+Shift+Z) redo. Ctrl+S save setup. Ctrl+D duplicate the selected lane.\n"
        "Space is still FL's play/stop.\n"
        "G generate all (Shift+G: only the selected lane). M mutate all (Shift+M: selected lane).\n"
        "Up / Down: pick a lane. Left / Right: previous / next sample in that lane. A: hear it.\n"
@@ -1496,7 +1524,7 @@ HelpOverlay::HelpOverlay()
        "Hover the name for the reason and the detected note.\n"
        "Length: steps in the loop. Up to 64 steps it moves by 1, beyond that by whole bars, up to 64 bars. Lanes with different lengths drift against each other.\n"
        "Rate: how long a step is (1/16 is normal; T = triplet, D = dotted).\n"
-       "Gen / Mut: new pattern / evolve the pattern for this lane only.\n"
+       "Gen / Mut: new pattern / evolve the pattern for this lane only. + duplicates the lane (sample, pattern, every setting), x removes it.\n"
        "Lvl, Pan, Pitch, Cut: level, stereo position, tuning, filter cutoff. These four can be automated in FL.\n"
        "Decay: how long the sample rings. Swing: shuffle feel. Hum: humanize (tiny timing and velocity changes).\n"
        "Step grid: click to turn steps on or off, drag to paint. Right-click for clear, shift, reverse, copy and paste.");
@@ -1511,6 +1539,8 @@ HelpOverlay::HelpOverlay()
     h ("Mixer tracks");
     p ("Each lane can have its own FL mixer track. In the lane editor (bottom), Mixer track picks where the lane goes; the How? button repeats these steps.\n"
        "Lanes playing inside Groovebox:\n"
+       "  0. Turn on Separate mixer tracks in the lane editor. It's off by default: then every lane plays on Groovebox's one mixer track, "
+       "so adding Groovebox to an existing project never touches your mixer.\n"
        "  1. Click the small plugin options icon at the top left of Groovebox's window (FL's plugin wrapper).\n"
        "  2. Open the Processing tab and click Auto map outputs.\n"
        "  3. Done: lane 1 lands on the first new mixer track, lane 2 on the next, and so on (Mixer track: Own).\n"
@@ -1931,6 +1961,7 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     grooveView.bpmBox.onChange = [this] (int) { grooveReanalyzeIn = 12; };
     grooveView.amount.onValueChange = [this] { proc.setGrooveAmount ((float) grooveView.amount.getValue()); };
     laneEditor.onStatus = grooveSlot.onStatus;
+    laneEditor.onDuplicate = [this] (int li) { duplicateSelected (li); };
     timeline.onStatus = grooveSlot.onStatus;
     timeline.setMouseCursor (juce::MouseCursor::IBeamCursor);
 
@@ -2074,6 +2105,7 @@ bool GrooveboxEditor::keyPressed (const juce::KeyPress& key)
         if (upper == 'Z' && ! mods.isShiftDown()) { doUndo (false); return true; }
         if (upper == 'Y' || (upper == 'Z' && mods.isShiftDown())) { doUndo (true); return true; }
         if (upper == 'S') { saveSetupAs(); return true; }
+        if (upper == 'D') { duplicateSelected(); return true; }
         return false; // other Ctrl shortcuts belong to FL
     }
     if (mods.isAltDown())
@@ -2213,6 +2245,21 @@ void GrooveboxEditor::setupBar (juce::Slider& s, const juce::String& name, doubl
     s.updateText();
 }
 
+void GrooveboxEditor::duplicateSelected (int li)
+{
+    if (li < 0) li = view.selected;
+    const int copy = proc.duplicateLane (li);
+    if (copy < 0)
+    {
+        status.setText ("Can't duplicate: all 32 lanes are in use", juce::dontSendNotification);
+        return;
+    }
+    syncRows();
+    view.selected = -1;
+    selectLane (copy);
+    status.setText ("Duplicated lane " + juce::String (li + 1) + " (sample, pattern and every setting). Ctrl+Z undoes it.", juce::dontSendNotification);
+}
+
 void GrooveboxEditor::setShowGroove (bool on)
 {
     showGroove = on;
@@ -2277,6 +2324,7 @@ void GrooveboxEditor::syncRows()
     {
         rows.push_back (std::make_unique<LaneRow> (proc, view));
         rows.back()->onSelect = [this] (int li) { selectLane (li); };
+        rows.back()->onDuplicate = [this] (int li) { duplicateSelected (li); };
         rows.back()->onEdited = [this] { laneEditor.refresh(); updatePageLabel(); };
         laneList.addAndMakeVisible (*rows.back());
         keepFocusOnEditor (*rows.back());

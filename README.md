@@ -64,6 +64,7 @@ Click anywhere in Groovebox first. **Space stays FL's play/stop.**
 |---|---|
 | Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) | Undo / redo (steps, generate, mutate, samples, lane settings, lanes, song) |
 | Ctrl+S | Save setup |
+| Ctrl+D | Duplicate the selected lane (also the + on each lane) |
 | G / Shift+G | Generate all / selected lane |
 | M / Shift+M | Mutate all / selected lane |
 | Up / Down | Select lane |
@@ -100,7 +101,7 @@ Manual edits (scrolling, drawing steps) still work on locked lanes.
 
 ## Mixer tracks
 
-**Lanes playing inside Groovebox:** open Groovebox's plugin wrapper (icon at the top left of its window), **Processing** tab, **Auto map outputs**. Lane 1 then lands on the first new mixer track, lane 2 on the next, and so on. In the lane editor, **Mixer track** picks Own, Main, or "Same as lane N" to share a track (the **How?** button repeats these steps).
+**Lanes playing inside Groovebox:** turn on **Separate mixer tracks** in the lane editor (it's off by default, so adding Groovebox to an existing project never touches your mixer: everything plays on Groovebox's one track). Then open Groovebox's plugin wrapper (icon at the top left of its window), **Processing** tab, **Auto map outputs**. Lane 1 then lands on the first new mixer track, lane 2 on the next, and so on. In the lane editor, **Mixer track** picks Own, Main, or "Same as lane N" to share a track (the **How?** button repeats these steps).
 
 **Lanes sent to FL as channels:** set the mixer track on the FL channel itself (the number box on the channel in the Channel Rack).
 
