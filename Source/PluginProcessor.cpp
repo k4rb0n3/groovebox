@@ -1456,6 +1456,13 @@ void GrooveboxProcessor::addLane()
         lanes[(size_t) nl] = Lane {};
         lanes[(size_t) nl].role = Role::Perc;
         lanes[(size_t) nl].name = "Lane " + juce::String (nl + 1);
+        // Own output, unless a lane already uses that one: then the first free output.
+        std::array<bool, kNumOuts> used {};
+        for (int j = 0; j < nl; ++j)
+            used[(size_t) juce::jlimit (0, kNumOuts - 1, lanes[(size_t) j].out < 0 ? j : lanes[(size_t) j].out)] = true;
+        if (nl < kNumOuts && used[(size_t) nl])
+            for (int o = 1; o < kNumOuts; ++o)
+                if (! used[(size_t) o]) { lanes[(size_t) nl].out = o; break; }
         for (auto& m : songMask) m |= (1u << nl); // a new lane plays throughout the song
         numLanes = nl + 1;
     }
@@ -1469,9 +1476,12 @@ int GrooveboxProcessor::duplicateLane (int li)
 
     Lane dup = lanes[(size_t) li]; // the message thread is the only writer, so reading without the lock is safe
     dup.solo = false;
+    if (dup.out < 0) dup.out = li; // the copy shares the original's mixer track
     if (! dup.name.endsWith (" copy")) dup.name << " copy";
     {
         const juce::SpinLock::ScopedLockType sl (lock);
+        for (int j = li + 1; j < nl; ++j) // lanes below keep their mixer track
+            if (lanes[(size_t) j].out < 0) lanes[(size_t) j].out = j;
         for (int j = nl; j > li + 1; --j)
             lanes[(size_t) j] = std::move (lanes[(size_t) j - 1]);
         lanes[(size_t) li + 1] = std::move (dup);
@@ -1506,6 +1516,9 @@ void GrooveboxProcessor::removeLane (int li)
     {
         const juce::SpinLock::ScopedLockType sl (lock);
         old = lanes[(size_t) li].sample;
+        // Lanes below keep the output (mixer track) they had, instead of sliding up to the next one.
+        for (int j = li + 1; j < nl; ++j)
+            if (lanes[(size_t) j].out < 0) lanes[(size_t) j].out = j;
         removed = std::move (lanes[(size_t) li]);
         for (int j = li; j < nl - 1; ++j)
             lanes[(size_t) j] = std::move (lanes[(size_t) j + 1]);
@@ -1646,8 +1659,11 @@ int GrooveboxProcessor::exportLengthBars() const
 juce::String GrooveboxProcessor::laneExportName (int li) const
 {
     const auto& l = lanes[(size_t) li];
-    juce::String n = l.name.isNotEmpty() ? l.name : juce::String (roleName (l.role));
-    if (l.sample != nullptr && l.sample->file.getFileNameWithoutExtension() != n)
+    // What FL shows as the channel name: the instrument, then the sample ("Snare - snare_04").
+    juce::String n = roleName (l.role);
+    if (l.follow >= 0 || (l.name.isNotEmpty() && ! l.name.containsIgnoreCase (n) && l.name.startsWith ("Foley")))
+        n = l.name; // "Foley after snare"
+    if (l.sample != nullptr)
         n << " - " << l.sample->file.getFileNameWithoutExtension();
     return juce::File::createLegalFileName (n).replaceCharacter ('/', '-').substring (0, 60).trim();
 }
@@ -1684,8 +1700,11 @@ juce::File GrooveboxProcessor::bakeLaneSample (int li)
     while (end > 16 && std::abs (out.getSample (0, end - 1)) < 3.0e-5f && std::abs (out.getSample (1, end - 1)) < 3.0e-5f)
         --end;
 
-    const auto hash = juce::String::toHexString (key.hashCode64()).getLastCharacters (4);
-    auto file = flExportFolder().getChildFile (name + " (" + hash + ").wav");
+    // One folder per baked sound, so the file (and FL's channel) carries just the readable name.
+    const auto hash = juce::String::toHexString (key.hashCode64()).getLastCharacters (8);
+    auto dir = flExportFolder().getChildFile ("Sounds").getChildFile (hash);
+    dir.createDirectory();
+    auto file = dir.getChildFile (name + ".wav");
     if (file.existsAsFile()) return file; // same sound already baked
 
     juce::WavAudioFormat wav;

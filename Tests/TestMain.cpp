@@ -1,4 +1,5 @@
 // Headless checks for Groovebox: library scan, generation, rendering, MIDI export, state, UI snapshot.
+#include <set>
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
 #include "../Source/GrooveAnalysis.h"
@@ -251,12 +252,13 @@ int main (int argc, char** argv)
         p.prepareToPlay (48000.0, 512);
         CHECK (p.getTotalNumOutputChannels() == 64, "32 stereo outputs available (" + juce::String (p.getTotalNumOutputChannels()) + " channels)");
         for (int i = 0; i < p.numLanes; ++i) p.lanes[(size_t) i].mute = (i != 1);
-        p.lanes[1].length = 16; p.lanes[1].rate = cg::kRate16;
+        p.lanes[1].length = 16; p.lanes[1].rate = cg::kRate16; p.lanes[1].out = 1;
         for (int s2 = 0; s2 < 16; ++s2) p.lanes[1].steps[(size_t) s2] = cg::Step { s2 % 4 == 0 };
         std::vector<float> peaks;
         render (p, head, 4.0, nullptr, nullptr, &peaks);
         CHECK (peaks.size() >= 2 && peaks[1] > 0.01f && peaks[0] < 0.001f, "lane 2 plays on its own output, not Main");
         for (int i = 0; i < p.numLanes; ++i) p.lanes[(size_t) i].mute = false;
+        p.separateOuts = false;
     }
 
     // 13. Step parameters and lane filter/reverse/attack render without trouble
@@ -712,6 +714,22 @@ int main (int argc, char** argv)
         CHECK (std::abs (p.apvts.getParameter (GrooveboxProcessor::paramId (1, "pitch"))->getValue() - 0.7f) < 0.001f,
                "duplicate keeps the knobs (pitch)");
         CHECK (p.undo() && p.numLanes.load() == before && p.lanes[1].name == nextName, "Ctrl+Z undoes the duplicate");
+
+        // Deleting a lane doesn't move the others to different mixer tracks.
+        const int effBefore = p.lanes[4].out < 0 ? 4 : p.lanes[4].out;
+        p.removeLane (2);
+        const int effAfter = p.lanes[3].out < 0 ? 3 : p.lanes[3].out;
+        CHECK (effAfter == effBefore, "after deleting a lane, the lanes below keep their mixer output (" + juce::String (effAfter + 1) + ")");
+        p.addLane();
+        std::set<int> outs; bool clash = false;
+        for (int j = 0; j < p.numLanes.load(); ++j)
+        {
+            const int e = p.lanes[(size_t) j].out < 0 ? j : p.lanes[(size_t) j].out;
+            if (p.lanes[(size_t) j].out < 0 && outs.count (e)) clash = true;
+            outs.insert (e);
+        }
+        CHECK (! clash, "a new lane gets a free output");
+        p.undo(); p.undo();
     }
 
     // 24. Foliage: followers, beds, foley, starter kits, randomize

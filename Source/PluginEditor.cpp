@@ -1391,9 +1391,17 @@ void LaneEditor::refresh()
 
     filterBox.setSelectedId ((int) l.filter + 1, n);
     outBox.clear (n);
-    outBox.addItem ("Own: mixer track for out " + juce::String (lane + 1), 1);
-    outBox.addItem ("Main (with lane 1)", 2);
-    for (int o = 2; o <= kNumOuts; ++o) outBox.addItem ("Same as lane " + juce::String (o) + " (out " + juce::String (o) + ")", o + 1);
+    outBox.addItem ("Own: output " + juce::String (lane + 1), 1);
+    outBox.addItem ("Main output (1)", 2);
+    for (int o = 2; o <= kNumOuts; ++o)
+    {
+        juce::String users;
+        for (int j = 0; j < proc.numLanes.load(); ++j)
+            if (j != lane && (proc.lanes[(size_t) j].out < 0 ? j : proc.lanes[(size_t) j].out) == o - 1)
+                users << (users.isEmpty() ? " (with " : ", ") << roleName (proc.lanes[(size_t) j].role);
+        if (users.isNotEmpty()) users << ")";
+        outBox.addItem ("Output " + juce::String (o) + users, o + 1);
+    }
     outBox.setSelectedId (l.out + 2, n);
     separateBtn.setToggleState (proc.separateOuts.load(), n);
     sampleDrag.setEnabled (l.sample != nullptr);
