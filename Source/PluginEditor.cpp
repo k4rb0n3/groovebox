@@ -697,8 +697,29 @@ juce::String SampleSlot::getTooltip()
 
 void SampleSlot::mouseUp (const juce::MouseEvent& e)
 {
-    if (e.mouseWasClicked() && ! e.mods.isPopupMenu())
+    if (! e.mouseWasClicked()) return;
+    if (! e.mods.isPopupMenu())
+    {
         proc.audition (lane);
+        return;
+    }
+
+    const auto& L = proc.lanes[(size_t) lane];
+    const auto file = L.sample != nullptr ? L.sample->file : juce::File();
+    const auto folder = L.folder;
+    juce::PopupMenu m;
+    m.addItem (1, "Open in Explorer", file.existsAsFile() || folder.isDirectory());
+    m.addItem (2, "Copy file path", file.existsAsFile());
+    m.addSeparator();
+    m.addItem (3, "Audition");
+    juce::Component::SafePointer<SampleSlot> self (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [self, file, folder] (int r)
+    {
+        if (self == nullptr) return;
+        if (r == 1) { if (file.existsAsFile()) file.revealToUser(); else folder.revealToUser(); }
+        if (r == 2) juce::SystemClipboard::copyTextToClipboard (file.getFullPathName());
+        if (r == 3) self->proc.audition (self->lane);
+    });
 }
 
 void SampleSlot::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
@@ -752,8 +773,10 @@ LaneRow::LaneRow (GrooveboxProcessor& p, ViewState& v)
     soloBtn.setColour (juce::TextButton::buttonOnColourId, kAccent);
     muteBtn.setTooltip ("Mute lane");
     soloBtn.setTooltip ("Solo lane");
-    lockSampleBtn.setTooltip ("Lock this sample: Shuffle, ? and library scans won't change it");
-    lockPatternBtn.setTooltip ("Lock this pattern: Generate and Mutate won't change it");
+    lockSampleBtn.setTooltip ("Lock this lane: Shuffle, ?, library scans, Generate and Mutate leave its sample and pattern alone. "
+                              "Right-click to lock only the sample or only the pattern");
+    lockPatternBtn.setTooltip ("Lock this lane: Shuffle, ?, library scans, Generate and Mutate leave its sample and pattern alone. "
+                               "Right-click to lock only the sample or only the pattern");
     prevBtn.setTooltip ("Previous sample (or scroll the mouse wheel over the name)");
     nextBtn.setTooltip ("Next sample");
     randBtn.setTooltip ("Random sample, favouring ones that fit this role and genre");
@@ -780,8 +803,32 @@ LaneRow::LaneRow (GrooveboxProcessor& p, ViewState& v)
 
     muteBtn.onClick = [this] { edit ([this] (Lane& l) { l.mute = muteBtn.getToggleState(); }); };
     soloBtn.onClick = [this] { edit ([this] (Lane& l) { l.solo = soloBtn.getToggleState(); }); };
-    lockSampleBtn.onClick = [this] { edit ([this] (Lane& l) { l.lockSample = lockSampleBtn.getToggleState(); }); refresh(); };
-    lockPatternBtn.onClick = [this] { edit ([this] (Lane& l) { l.lockPattern = lockPatternBtn.getToggleState(); }); refresh(); };
+    // One click locks the whole lane (sample and pattern); right-click for just one of them.
+    auto toggleBoth = [this]
+    {
+        edit ([] (Lane& l) { const bool on = ! (l.lockSample && l.lockPattern); l.lockSample = on; l.lockPattern = on; });
+        refresh();
+    };
+    auto lockMenu = [this]
+    {
+        const auto& l = proc.lanes[(size_t) lane];
+        juce::PopupMenu m;
+        m.addItem (1, "Lock sample and pattern", true, l.lockSample && l.lockPattern);
+        m.addItem (2, "Lock only the sample", true, l.lockSample && ! l.lockPattern);
+        m.addItem (3, "Lock only the pattern", true, l.lockPattern && ! l.lockSample);
+        m.addItem (4, "Unlock", l.lockSample || l.lockPattern);
+        juce::Component::SafePointer<LaneRow> self (this);
+        m.showMenuAsync (juce::PopupMenu::Options(), [self] (int r)
+        {
+            if (self == nullptr || r == 0) return;
+            self->edit ([r] (Lane& ln) { ln.lockSample = r == 1 || r == 2; ln.lockPattern = r == 1 || r == 3; });
+            self->refresh();
+        });
+    };
+    lockSampleBtn.onClick = toggleBoth;
+    lockPatternBtn.onClick = toggleBoth;
+    lockSampleBtn.onRightClick = lockMenu;
+    lockPatternBtn.onRightClick = lockMenu;
     roleBox.onChange = [this]
     {
         edit ([this] (Lane& l) { l.role = (Role) (roleBox.getSelectedId() - 1); });
@@ -1517,7 +1564,7 @@ HelpOverlay::HelpOverlay()
     h ("Each lane");
     p ("M / S: mute / solo.\n"
        "Role: what the lane is (kick, hat...). It guides the generator and the fit rating.\n"
-       "Padlocks: the first locks the sample (Shuffle, ? and Library leave it alone), the second locks the pattern (Generate and Mutate leave it alone).\n"
+       "Padlocks: click either one to lock the lane (Shuffle, ?, Library, Generate and Mutate leave its sample and pattern alone). Right-click a padlock to lock only the sample or only the pattern. Right-click a sample name to open it in Explorer.\n"
        "< name >: previous / next sample. Scrolling on the name does the same. Click the name to hear it.\n"
        "?: random sample that fits the role. ...: choose a folder.\n"
        "Coloured dot: how well the sample fits this role in this genre. Green good, yellow usable, red poor, hollow still listening. "

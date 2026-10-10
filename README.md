@@ -85,12 +85,9 @@ Groovebox listens to every sample in your folders (tail length, attack, brightne
 
 ## Locks
 
-Each lane has two padlocks:
+Click a lane's padlock (either one) to **lock the lane**: Shuffle samples, **?**, library scans, Generate and Mutate leave its sample and pattern alone. Right-click a padlock to lock only the sample or only the pattern. Manual edits (scrolling, drawing steps) still work on locked lanes.
 
-- Before the sample name: **sample lock**. Shuffle samples, **?** and Library scans leave that sample alone.
-- Before Gen: **pattern lock**. Generate, Mutate and the lane's Gen/Mut leave that pattern alone.
-
-Manual edits (scrolling, drawing steps) still work on locked lanes.
+Right-click a sample name to **open it in Explorer** or copy its path.
 
 ## Setups
 

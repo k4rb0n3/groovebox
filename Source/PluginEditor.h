@@ -28,8 +28,14 @@ public:
 class LockButton : public juce::Button
 {
 public:
-    LockButton() : juce::Button ("lock") { setClickingTogglesState (true); }
+    LockButton() : juce::Button ("lock") {}
     void paintButton (juce::Graphics&, bool over, bool down) override;
+    std::function<void()> onRightClick;
+    void clicked (const juce::ModifierKeys& m) override
+    {
+        if (m.isPopupMenu()) { if (onRightClick) onRightClick(); }
+        else juce::Button::clicked (m);
+    }
 };
 
 // Step on/off row (velocity shown as bar height). Used small in each lane and large in the lane editor.
