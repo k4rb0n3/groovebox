@@ -95,10 +95,9 @@ GrooveboxProcessor::GrooveboxProcessor()
     initDefaultLanes();
     generateAll();
 
-    // A fresh Groovebox picks up where you left off: last folders, samples and patterns.
-    // (When FL loads a project it restores that project's state right after this.)
-    if (lastSessionFile().existsAsFile())
-        loadSetup (lastSessionFile());
+    // A fresh Groovebox picks up where you left off: last folders, samples and patterns. Only a new one:
+    // when FL opens a project it hands us that project's state, which then wins and the last session is skipped.
+    lastSessionPending = lastSessionFile().existsAsFile();
 
     startTimer (1000);
 }
@@ -538,6 +537,10 @@ void GrooveboxProcessor::swapSample (int li, cg::SamplePtr sp)
 
 void GrooveboxProcessor::timerCallback()
 {
+    // No project state arrived in the first moments: this is a new Groovebox, so bring back the last session.
+    if (lastSessionPending.load() && ++timerTicks >= 2)
+        loadLastSessionIfNew();
+
     retired.erase (std::remove_if (retired.begin(), retired.end(),
                                    [] (const cg::SamplePtr& p) { return p.use_count() <= 1; }),
                    retired.end());
@@ -1607,8 +1610,16 @@ void GrooveboxProcessor::getStateInformation (juce::MemoryBlock& destData)
 
 void GrooveboxProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
+    lastSessionPending = false; // a project's own state always wins over the last session
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         applyStateXml (*xml);
+}
+
+void GrooveboxProcessor::loadLastSessionIfNew()
+{
+    if (! lastSessionPending.exchange (false))
+        return;
+    loadSetup (lastSessionFile());
 }
 
 void GrooveboxProcessor::applyStateXml (const juce::XmlElement& xmlRef)

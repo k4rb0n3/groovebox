@@ -1902,6 +1902,7 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     : AudioProcessorEditor (&p), proc (p), laneEditor (p, view), timeline (p), grooveSlot (p), grooveView (p)
 {
     setLookAndFeel (&look);
+    proc.loadLastSessionIfNew(); // before showing anything (does nothing for a project's Groovebox)
     proc.editorEverOpened = true;
 
     title.setText ("GROOVEBOX", juce::dontSendNotification);

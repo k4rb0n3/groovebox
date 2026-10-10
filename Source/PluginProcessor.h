@@ -43,6 +43,9 @@ public:
     bool loadSetup (const juce::File&);
     void autosave();               // writes the last-session file when something changed
     bool editorEverOpened = false; // only real sessions autosave (not plugin scans)
+    std::atomic<bool> lastSessionPending { false };
+    int timerTicks = 0;
+    void loadLastSessionIfNew();   // new instances only; a project's state cancels it
 
     //== Background folder scanning ===================================================
     std::atomic<int> ioBusy { 0 };

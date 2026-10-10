@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Groovebox VERSION 0.6.3)
+project(Groovebox VERSION 0.6.4)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
