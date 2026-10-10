@@ -1308,7 +1308,17 @@ LaneEditor::LaneEditor (GrooveboxProcessor& p, ViewState& v) : proc (p), view (v
     reverseBtn.setTooltip ("Play the sample backwards");
 
     filterBox.onChange = [this] { edit ([this] (Lane& l) { l.filter = (FilterType) (filterBox.getSelectedId() - 1); }); };
-    outBox.onChange    = [this] { edit ([this] (Lane& l) { l.out = outBox.getSelectedId() - 2; }); };
+    outBox.onChange    = [this]
+    {
+        edit ([this] (Lane& l) { l.out = outBox.getSelectedId() - 2; });
+        if (! proc.separateOuts.load())
+        {
+            proc.separateOuts = true; // picking a mixer track only means something with separate outputs on
+            separateBtn.setToggleState (true, juce::dontSendNotification);
+        }
+        if (onStatus) onStatus ("Separate mixer tracks is on. In FL: plugin options (top left) > Processing > Auto map outputs, "
+                                "and make sure each output's circle is lit. Click How? for the steps.");
+    };
     chokeBox.onChange  = [this] { edit ([this] (Lane& l) { l.choke = chokeBox.getSelectedId() - 1; }); };
     reso.onValueChange   = [this] { edit ([this] (Lane& l) { l.reso = (float) reso.getValue(); }); };
     attack.onValueChange = [this] { edit ([this] (Lane& l) { l.attack = (float) attack.getValue(); }); };
@@ -1328,7 +1338,7 @@ void LaneEditor::showMixerHelp()
         "While lanes play inside Groovebox:\n"
         "0. Turn on Separate mixer tracks here (off by default, so Groovebox never disturbs an existing project's mixer).\n"
         "1. Click the small gear/arrow at the top left of Groovebox's window (the FL plugin wrapper) and open the Processing tab.\n"
-        "2. Click \"Auto map outputs\". FL gives each Groovebox output its own mixer track.\n"
+        "2. Click \"Auto map outputs\". FL gives each Groovebox output its own mixer track. In the list of outputs there, make sure the circle in front of each one is lit (click it if not).\n"
         "3. Here, Mixer track \"Own\" means lane 1 goes to the first of those tracks, lane 2 to the second, and so on. "
         "Pick another track to send several lanes to the same one.\n\n"
         "Lanes you sent to FL as channels (Sample > Channel Rack): set the mixer track in FL, in the small number box "
@@ -1386,7 +1396,6 @@ void LaneEditor::refresh()
     for (int o = 2; o <= kNumOuts; ++o) outBox.addItem ("Same as lane " + juce::String (o) + " (out " + juce::String (o) + ")", o + 1);
     outBox.setSelectedId (l.out + 2, n);
     separateBtn.setToggleState (proc.separateOuts.load(), n);
-    outBox.setEnabled (proc.separateOuts.load());
     sampleDrag.setEnabled (l.sample != nullptr);
 
     rebuildPlaysBox();
