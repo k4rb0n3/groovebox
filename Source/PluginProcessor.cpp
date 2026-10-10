@@ -67,7 +67,7 @@ juce::AudioProcessor::BusesProperties GrooveboxProcessor::makeBuses()
 {
     auto b = BusesProperties().withOutput ("Lane 1 / Main", juce::AudioChannelSet::stereo(), true);
     for (int i = 2; i <= kNumOuts; ++i)
-        b = b.withOutput ("Lane " + juce::String (i), juce::AudioChannelSet::stereo(), false);
+        b = b.withOutput ("Lane " + juce::String (i), juce::AudioChannelSet::stereo(), true); // on by default so FL's Auto map outputs works
     return b;
 }
 
