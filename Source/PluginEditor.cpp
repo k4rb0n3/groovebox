@@ -191,6 +191,53 @@ void StepGrid::paint (juce::Graphics& g)
         g.drawText (label, 0, 0, labelW - 6, (int) h, juce::Justification::centredLeft, false);
     }
 
+    // Beds and followers don't use steps: show what they do instead.
+    const int nlNow = proc.numLanes.load();
+    if (L.isBed() || (L.follow >= 0 && L.follow < nlNow))
+    {
+        auto area = juce::Rectangle<float> ((float) labelW, 0.0f, (float) (getWidth() - labelW), h).reduced (1.0f, 2.0f);
+        g.setColour (juce::Colour (0xff25282d));
+        g.fillRoundedRectangle (area, 3.0f);
+        g.setFont (juce::FontOptions (juce::jmin (12.0f, h * 0.45f)));
+        if (L.isBed())
+        {
+            juce::Path wave;
+            for (int x = 0; x <= (int) area.getWidth(); x += 3)
+            {
+                const float y = area.getCentreY() + std::sin ((float) x * 0.045f) * area.getHeight() * 0.18f
+                                                  + std::sin ((float) x * 0.13f) * area.getHeight() * 0.06f;
+                if (x == 0) wave.startNewSubPath (area.getX(), y); else wave.lineTo (area.getX() + (float) x, y);
+            }
+            g.setColour (col.withAlpha (0.45f));
+            g.strokePath (wave, juce::PathStrokeType (1.5f));
+            g.setColour (kText.withAlpha (0.85f));
+            g.drawText ("Bed: runs underneath", area.reduced (8.0f, 0.0f).toNearestInt(),
+                        juce::Justification::centredRight, false);
+            return;
+        }
+
+        const auto& leader = proc.lanes[(size_t) L.follow];
+        const auto [ls, lc] = viewWindow (leader, view.page);
+        const float lw = area.getWidth() / (float) lc;
+        const double delaySteps = (double) L.followDelay / 1000.0 * proc.lastBpm.load() / 60.0 / leader.stepBeats();
+        for (int i = 0; i < lc; ++i)
+        {
+            const auto& st = leader.steps[(size_t) (ls + i)];
+            if (! st.on) continue;
+            const float x = area.getX() + (float) i * lw;
+            g.setColour (roleColour (leader.role).withAlpha (0.25f));
+            g.fillRect (x + 1.0f, area.getBottom() - area.getHeight() * 0.35f, juce::jmax (1.5f, lw - 2.0f), area.getHeight() * 0.35f);
+            const float fx = x + (float) (delaySteps * lw);
+            g.setColour (col.withAlpha (0.25f + 0.75f * L.followChance));
+            g.fillEllipse (fx - 2.5f + lw * 0.5f, area.getY() + area.getHeight() * 0.3f, 5.0f, 5.0f);
+        }
+        g.setColour (kText.withAlpha (0.85f));
+        g.drawText ("after " + (leader.name.isNotEmpty() ? leader.name : juce::String (roleName (leader.role))) + ": "
+                        + juce::String (juce::roundToInt (L.followChance * 100.0f)) + "%, +" + juce::String (juce::roundToInt (L.followDelay)) + " ms",
+                    area.reduced (8.0f, 0.0f).toNearestInt(), juce::Justification::centredRight, false);
+        return;
+    }
+
     for (int i = 0; i < count; ++i)
     {
         const int idx = start + i;
@@ -239,6 +286,10 @@ void StepGrid::paint (juce::Graphics& g)
 void StepGrid::mouseDown (const juce::MouseEvent& e)
 {
     if (onTouched) onTouched();
+    {
+        const auto& L = proc.lanes[(size_t) lane];
+        if (L.isBed() || L.follow >= 0) return; // no steps to edit
+    }
     if (e.mods.isPopupMenu())
     {
         showMenu();
@@ -249,6 +300,7 @@ void StepGrid::mouseDown (const juce::MouseEvent& e)
 
 void StepGrid::mouseDrag (const juce::MouseEvent& e)
 {
+    if (proc.lanes[(size_t) lane].isBed() || proc.lanes[(size_t) lane].follow >= 0) return;
     if (! e.mods.isPopupMenu())
         applyAt (e, false);
 }
@@ -1102,8 +1154,53 @@ LaneEditor::LaneEditor (GrooveboxProcessor& p, ViewState& v) : proc (p), view (v
 {
     for (auto* c : std::initializer_list<juce::Component*> { &title, &fitLabel, &hint, &filterBox, &outBox, &chokeBox,
                                                              &reso, &attack, &reverseBtn, &steps, &mixerHelpBtn,
-                                                             &sampleDrag, &notesDrag, &allDrag, &separateBtn, &dupLaneBtn })
+                                                             &sampleDrag, &notesDrag, &allDrag, &separateBtn, &dupLaneBtn,
+                                                             &playsBox, &fChance, &fDelay, &fDrift, &fVel, &modeInfo })
         addAndMakeVisible (c);
+
+    playsBox.setTooltip ("How this lane plays: on its own steps, right after another lane's hits (a follower: foley that "
+                         "completes another sound, off the grid), or as a bed running underneath (crackle, rain, room tone)");
+    playsBox.onChange = [this]
+    {
+        const int id = playsBox.getSelectedId();
+        edit ([id, this] (Lane& l)
+        {
+            if (id == 1) { l.follow = -1; if (l.role == Role::Bed) l.role = Role::Foley; }
+            else if (id == 2) { l.follow = -1; l.role = Role::Bed; }
+            else if (id >= 100 && id - 100 != lane) { l.follow = id - 100; if (l.role == Role::Bed) l.role = Role::Foley; }
+        });
+        refresh();
+        if (onEdited) onEdited();
+    };
+    auto bar = [this] (juce::Slider& s, double lo, double hi, double def, std::function<juce::String (double)> text,
+                       std::function<void (Lane&, float)> set, const char* tip)
+    {
+        s.setSliderStyle (juce::Slider::LinearBar);
+        s.setTextBoxStyle (juce::Slider::TextBoxLeft, true, 160, 20);
+        s.setRange (lo, hi, 0.0);
+        s.textFromValueFunction = text;
+        s.setDoubleClickReturnValue (true, def);
+        s.setTooltip (tip);
+        s.onValueChange = [this, &s, set]
+        {
+            const float v = (float) s.getValue();
+            edit ([&] (Lane& l) { set (l, v); });
+            steps.repaint();
+            if (onEdited) onEdited();
+        };
+    };
+    bar (fChance, 0.0, 1.0, 0.35, [] (double v) { return "Answers " + juce::String (juce::roundToInt (v * 100.0)) + "% of the hits"; },
+         [] (Lane& l, float v) { l.followChance = v; }, "How often this lane answers its leader's hits");
+    bar (fDelay, 5.0, 400.0, 40.0, [] (double v) { return "Comes " + juce::String (juce::roundToInt (v)) + " ms after"; },
+         [] (Lane& l, float v) { l.followDelay = v; }, "How long after the leader's hit it plays. 10 to 60 ms glues it on, 100+ ms becomes an echo-like answer");
+    fDelay.setSkewFactorFromMidPoint (60.0);
+    bar (fDrift, 0.0, 1.0, 0.35, [] (double v) { return "Drift " + juce::String (juce::roundToInt (v * 100.0)) + "%"; },
+         [] (Lane& l, float v) { l.followDrift = v; }, "Random spread of the timing, sample start, pitch and pan, so it never repeats exactly");
+    bar (fVel, 0.0, 1.0, 0.5, [] (double v) { return "Level " + juce::String (juce::roundToInt (v * 100.0)) + "% of the leader"; },
+         [] (Lane& l, float v) { l.followVel = v; }, "How loud it is compared to the hit it follows");
+    modeInfo.setFont (juce::FontOptions (12.0f));
+    modeInfo.setColour (juce::Label::textColourId, kDim);
+    modeInfo.setJustificationType (juce::Justification::topLeft);
 
     for (int i = 0; i < (int) Param::Count; ++i)
     {
@@ -1238,6 +1335,23 @@ void LaneEditor::showMixerHelp()
         "on the channel in the Channel Rack (or the channel's settings).");
 }
 
+void LaneEditor::rebuildPlaysBox()
+{
+    const auto& l = proc.lanes[(size_t) lane];
+    playsBox.clear (juce::dontSendNotification);
+    playsBox.addItem ("Plays its own steps", 1);
+    playsBox.addItem ("Bed: runs underneath everything", 2);
+    playsBox.addSeparator();
+    const int nl = proc.numLanes.load();
+    for (int j = 0; j < nl; ++j)
+    {
+        const auto& o = proc.lanes[(size_t) j];
+        if (j == lane || o.follow >= 0 || o.isBed()) continue; // follow lanes that play their own steps
+        playsBox.addItem ("Right after lane " + juce::String (j + 1) + ": " + (o.name.isNotEmpty() ? o.name : juce::String (roleName (o.role))), 100 + j);
+    }
+    playsBox.setSelectedId (l.isBed() ? 2 : (l.follow >= 0 ? 100 + l.follow : 1), juce::dontSendNotification);
+}
+
 void LaneEditor::setLane (int li)
 {
     lane = juce::jlimit (0, kMaxLanes - 1, li);
@@ -1274,6 +1388,21 @@ void LaneEditor::refresh()
     separateBtn.setToggleState (proc.separateOuts.load(), n);
     outBox.setEnabled (proc.separateOuts.load());
     sampleDrag.setEnabled (l.sample != nullptr);
+
+    rebuildPlaysBox();
+    fChance.setValue (l.followChance, n);
+    fDelay.setValue (l.followDelay, n);
+    fDrift.setValue (l.followDrift, n);
+    fVel.setValue (l.followVel, n);
+    for (auto* s : { &fChance, &fDelay, &fDrift, &fVel }) s->updateText();
+    const int mode = l.isBed() ? 2 : (l.follow >= 0 ? 1 : 0);
+    modeInfo.setText (mode == 2 ? "This lane is a bed: its sample loops underneath everything (with a soft crossfade) while the music plays, "
+                                  "and fades in and out with song sections. Use the lane's Lvl, Pan, Pitch and Cut knobs and the filter to sit it "
+                                  "in the mix. Good for vinyl crackle, rain, room tone, hiss, field recordings."
+                                : "A follower plays right after its leader's hits, off the grid, like a small sound completing another one. "
+                                  "Shown above: the leader's hits (bars) and where this lane answers (dots).",
+                      juce::dontSendNotification);
+    if (mode != shownMode) { shownMode = mode; resized(); }
     chokeBox.setSelectedId (l.choke + 1, n);
     reso.setValue (l.reso, n);
     attack.setValue (l.attack, n);
@@ -1351,12 +1480,37 @@ void LaneEditor::resized()
     left.removeFromTop (4);
     hint.setBounds (left);
 
-    const int stripCount = (int) strips.size();
-    steps.setBounds (r.removeFromTop (40));
+    auto head = r.removeFromTop (24);
+    head.removeFromLeft (ParamStrip::kLabelW);
+    playsBox.setBounds (head.removeFromLeft (juce::jmin (380, head.getWidth())));
     r.removeFromTop (4);
-    const int sh = juce::jmax (14, r.getHeight() / juce::jmax (1, stripCount));
-    for (auto& s : strips)
-        s->setBounds (r.removeFromTop (sh));
+
+    const int mode = juce::jmax (0, shownMode);
+    for (auto& s : strips) s->setVisible (mode == 0);
+    for (auto* s : { &fChance, &fDelay, &fDrift, &fVel }) s->setVisible (mode == 1);
+    modeInfo.setVisible (mode != 0);
+
+    steps.setBounds (r.removeFromTop (40));
+    r.removeFromTop (6);
+    if (mode == 0)
+    {
+        const int stripCount = (int) strips.size();
+        const int sh = juce::jmax (14, r.getHeight() / juce::jmax (1, stripCount));
+        for (auto& s : strips)
+            s->setBounds (r.removeFromTop (sh));
+        return;
+    }
+    r.removeFromLeft (ParamStrip::kLabelW);
+    if (mode == 1)
+    {
+        auto cols = r.removeFromTop (64);
+        auto c1 = cols.removeFromLeft (cols.getWidth() / 2 - 6);
+        cols.removeFromLeft (12);
+        fChance.setBounds (c1.removeFromTop (28)); c1.removeFromTop (8); fDelay.setBounds (c1.removeFromTop (28));
+        fDrift.setBounds (cols.removeFromTop (28)); cols.removeFromTop (8); fVel.setBounds (cols.removeFromTop (28));
+        r.removeFromTop (10);
+    }
+    modeInfo.setBounds (r.removeFromTop (60));
 }
 
 //==============================================================================
@@ -1522,6 +1676,51 @@ void SongTimeline::seekFrom (const juce::MouseEvent& e)
 }
 
 //==============================================================================
+SettingsPanel::SettingsPanel()
+{
+    addAndMakeVisible (doneBtn);
+    doneBtn.onClick = [this] { setVisible (false); };
+}
+
+void SettingsPanel::addRow (juce::Component& c, const juce::String& caption)
+{
+    rows.push_back ({ &c, caption });
+    addAndMakeVisible (c);
+}
+
+void SettingsPanel::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    g.setColour (juce::Colours::black.withAlpha (0.35f));
+    g.fillRoundedRectangle (r.translated (0.0f, 3.0f), 6.0f);
+    g.setColour (kPanel.brighter (0.06f));
+    g.fillRoundedRectangle (r.reduced (1.0f), 6.0f);
+    g.setColour (kAccent.withAlpha (0.6f));
+    g.drawRoundedRectangle (r.reduced (1.0f), 6.0f, 1.0f);
+    g.setColour (kAccent);
+    g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+    g.drawText ("Settings", 14, 10, 200, 22, juce::Justification::centredLeft, false);
+    g.setColour (kDim);
+    g.setFont (juce::FontOptions (11.0f));
+    for (const auto& [c, caption] : rows)
+        g.drawFittedText (caption, c->getRight() + 12, c->getY(), getWidth() - c->getRight() - 24, c->getHeight(),
+                          juce::Justification::centredLeft, 2);
+}
+
+void SettingsPanel::resized()
+{
+    auto r = getLocalBounds().reduced (14, 10);
+    auto top = r.removeFromTop (26);
+    doneBtn.setBounds (top.removeFromRight (64));
+    r.removeFromTop (10);
+    for (auto& [c, caption] : rows)
+    {
+        c->setBounds (r.removeFromTop (26).withWidth (190));
+        r.removeFromTop (8);
+    }
+}
+
+//==============================================================================
 HelpOverlay::HelpOverlay()
 {
     addAndMakeVisible (text);
@@ -1598,8 +1797,22 @@ HelpOverlay::HelpOverlay()
     p ("Lanes in the same choke group cut each other off, like a real hi-hat: the open hat stops the moment the closed hat plays. "
        "Closed and open hat lanes are in group 1 by default. 'No choke' lets sounds ring over each other.");
 
+    h ("Foliage: foley, followers and beds");
+    p ("Good tracks in microhouse, deep and dusty house or 2-step live on quiet detail around the drums. Three lane types for that:\n"
+       "Followers: in the lane editor, set Plays to \"Right after lane N\". The lane then answers that lane's hits a few ms later, off the grid, "
+       "like a rustle or tick completing the snare. Set how often it answers, how many ms after, how much it drifts (timing, sample start, pitch) "
+       "and how loud it is compared to the hit.\n"
+       "Foley lanes (role Foley): sparse, quiet hits on 1/32 steps nudged off the grid, each from a different part of the sample, different every bar.\n"
+       "Beds (role Bed, or Plays: Bed): the sample loops underneath everything while the music runs, with a soft crossfade, and fades in and out "
+       "with song sections. Vinyl crackle, rain, room tone, hiss, field recordings.\n"
+       "Starter kit (top bar) sets up the lanes a genre needs, with followers and beds, keeps the samples you already have for those instruments "
+       "and fills the rest from your library (folders named foley, vinyl, crackle, rain, vocal... are recognised).");
+
     h ("Generating");
-    p ("Genre sets the style and the typical tempo (shown in the BPM box). Hybrid gives every lane a different genre; Free ignores genre rules.\n"
+    p ("Genre sets the style and the typical tempo (shown in the BPM box). Microhouse, Deep & dusty and 2-step / future garage are built "
+       "for foliage: they add more quiet foley. Hybrid gives every lane a different genre; Free ignores genre rules.\n"
+       "Randomize all: new instruments from your library, new samples and new patterns at once (locked lanes stay).\n"
+       "Settings (top bar) holds the finer knobs:\n"
        "Density: how busy. Variation: ghost notes, softer and louder hits, steps that only sometimes play, small timing shifts. "
        "Irregular: odd lengths, triplets and Euclidean patterns.\n"
        "Loop: how many bars Generate writes (1 to 64). Long loops evolve bar by bar, with small fills every 4 and 8 bars. "
@@ -1924,12 +2137,40 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     pageLabel.setFont (juce::FontOptions (12.0f));
 
     for (auto* c : std::initializer_list<juce::Component*> {
-             &title, &byline, &status, &bpmLabel, &pageLabel, &helpBtn, &setupsBtn, &libraryBtn, &shuffleBtn, &fitFilterBtn,
-             &generateBtn, &mutateBtn, &previewBtn, &seqBtn, &genreBox, &loopBox,
-             &songLenBox, &songBtn, &makeSongBtn, &pagePrev, &pageNext, &followBtn, &editorBtn, &density, &variation,
-             &irregular, &mutateAmt, &swingScale, &humScale, &master, &bpmBox, &viewport, &laneEditor, &timeline,
+             &title, &byline, &status, &bpmLabel, &pageLabel, &helpBtn, &setupsBtn, &libraryBtn, &shuffleBtn,
+             &generateBtn, &mutateBtn, &previewBtn, &seqBtn, &genreBox, &loopBox, &settingsBtn, &randomBtn, &kitBtn,
+             &songLenBox, &songBtn, &makeSongBtn, &pagePrev, &pageNext, &followBtn, &editorBtn,
+             &master, &bpmBox, &viewport, &laneEditor, &timeline,
              &grooveSlot, &grooveView })
         addAndMakeVisible (c);
+
+    settings.addRow (density, "How busy Generate makes the patterns");
+    settings.addRow (variation, "Ghost notes, velocity spread, steps that don't always play, micro timing");
+    settings.addRow (irregular, "Chance of odd lane lengths, odd rates and Euclidean placement (polymeters)");
+    settings.addRow (swingScale, "Scales every lane's swing (automatable in FL)");
+    settings.addRow (humScale, "Scales every lane's humanize (automatable in FL)");
+    settings.addRow (mutateAmt, "How much Mutate changes the groove");
+    settings.addRow (fitFilterBtn, "Scrolling skips samples rated a poor fit for the lane");
+    addChildComponent (settings);
+    settingsBtn.setTooltip ("Density, Variation, Irregular, Swing, Humanize, Mutate amount, Fit filter");
+    settingsBtn.onClick = [this] { settings.setVisible (! settings.isVisible()); settings.toFront (false); };
+    randomBtn.setTooltip ("Roll the dice: new instruments from your library, new samples and new patterns. Locked lanes stay. Ctrl+Z undoes it");
+    randomBtn.onClick = [this]
+    {
+        proc.randomizeAll();
+        status.setText (proc.libraryRoot.isDirectory() ? "Randomized: new instruments, samples and patterns (locked lanes kept). Ctrl+Z undoes it."
+                                                       : "Randomized samples and patterns. Pick a library (Library...) so Randomize all can also swap instruments.",
+                        juce::dontSendNotification);
+    };
+    kitBtn.setTooltip ("Set up the lanes this genre needs: core drums, foley that follows other hits, and beds. "
+                       "Keeps samples you already have for those instruments, fills the rest from your library. Ctrl+Z undoes it");
+    kitBtn.onClick = [this]
+    {
+        proc.applyStarterKit (proc.gen.genre);
+        status.setText (juce::String ("Starter kit for ") + genreName (proc.gen.genre) + ": " + juce::String (proc.numLanes.load())
+                            + " lanes. Click a Foley lane to see what it follows. Ctrl+Z undoes it.",
+                        juce::dontSendNotification);
+    };
     addChildComponent (help);
 
     generateBtn.setColour (juce::TextButton::buttonColourId, kAccent.withAlpha (0.85f));
@@ -2167,6 +2408,7 @@ bool GrooveboxEditor::keyPressed (const juce::KeyPress& key)
     if (code == juce::KeyPress::downKey) { selectLane (juce::jmin (nl - 1, sel + 1)); return true; }
     if (code == juce::KeyPress::leftKey)  { proc.stepSample (sel, -1); for (auto& r : rows) r->repaintSlot(); laneEditor.refresh(); return true; }
     if (code == juce::KeyPress::rightKey) { proc.stepSample (sel, 1);  for (auto& r : rows) r->repaintSlot(); laneEditor.refresh(); return true; }
+    if (code == juce::KeyPress::escapeKey && settings.isVisible()) { settings.setVisible (false); return true; }
     if (code == juce::KeyPress::F1Key || upper == 'H') { help.setVisible (true); help.toFront (true); return true; }
 
     switch (upper)
@@ -2528,45 +2770,38 @@ void GrooveboxEditor::resized()
     helpBtn.setBounds (row1.removeFromLeft (52)); row1.removeFromLeft (4);
     setupsBtn.setBounds (row1.removeFromLeft (66)); row1.removeFromLeft (4);
     libraryBtn.setBounds (row1.removeFromLeft (80)); row1.removeFromLeft (4);
-    shuffleBtn.setBounds (row1.removeFromLeft (112)); row1.removeFromLeft (4);
-    fitFilterBtn.setBounds (row1.removeFromLeft (72)); row1.removeFromLeft (14);
-    genreBox.setBounds (row1.removeFromLeft (170)); row1.removeFromLeft (4);
+    settingsBtn.setBounds (row1.removeFromLeft (72)); row1.removeFromLeft (14);
+    genreBox.setBounds (row1.removeFromLeft (190)); row1.removeFromLeft (4);
+    kitBtn.setBounds (row1.removeFromLeft (84)); row1.removeFromLeft (4);
     generateBtn.setBounds (row1.removeFromLeft (84)); row1.removeFromLeft (4);
     mutateBtn.setBounds (row1.removeFromLeft (64)); row1.removeFromLeft (4);
-    mutateAmt.setBounds (row1.removeFromLeft (110));
+    shuffleBtn.setBounds (row1.removeFromLeft (112)); row1.removeFromLeft (4);
+    randomBtn.setBounds (row1.removeFromLeft (104));
     master.setBounds (row1.removeFromRight (30)); row1.removeFromRight (8);
     seqBtn.setBounds (row1.removeFromRight (84)); row1.removeFromRight (4);
     previewBtn.setBounds (row1.removeFromRight (52)); row1.removeFromRight (4);
     bpmBox.setBounds (row1.removeFromRight (74));
 
-    auto row2 = r.removeFromTop (30).reduced (10, 3);
-    for (auto* s : { &density, &variation, &irregular })
-    {
-        s->setBounds (row2.removeFromLeft (104));
-        row2.removeFromLeft (4);
-    }
-    row2.removeFromLeft (6);
-    swingScale.setBounds (row2.removeFromLeft (110)); row2.removeFromLeft (4);
-    humScale.setBounds (row2.removeFromLeft (128)); row2.removeFromLeft (10);
-    loopBox.setBounds (row2.removeFromLeft (104)); row2.removeFromLeft (10);
+    settings.setBounds (settingsBtn.getX(), settingsBtn.getBottom() + 4, 560, settings.preferredHeight());
+
+    auto row2 = r.removeFromTop (32).reduced (10, 4);
+    loopBox.setBounds (row2.removeFromLeft (104)); row2.removeFromLeft (8);
     songBtn.setBounds (row2.removeFromLeft (52)); row2.removeFromLeft (4);
     songLenBox.setBounds (row2.removeFromLeft (84)); row2.removeFromLeft (4);
-    makeSongBtn.setBounds (row2.removeFromLeft (80)); row2.removeFromLeft (10);
-    bpmLabel.setBounds (row2);
-
-    auto row3 = r.removeFromTop (30).reduced (10, 4);
-    pagePrev.setBounds (row3.removeFromLeft (24)); row3.removeFromLeft (2);
-    pageLabel.setBounds (row3.removeFromLeft (140)); row3.removeFromLeft (2);
-    pageNext.setBounds (row3.removeFromLeft (24)); row3.removeFromLeft (4);
-    followBtn.setBounds (row3.removeFromLeft (60)); row3.removeFromLeft (12);
-    grooveSlot.setBounds (row3.removeFromRight (420)); row3.removeFromRight (12);
-    timeline.setBounds (row3);
+    makeSongBtn.setBounds (row2.removeFromLeft (80)); row2.removeFromLeft (12);
+    pagePrev.setBounds (row2.removeFromLeft (24)); row2.removeFromLeft (2);
+    pageLabel.setBounds (row2.removeFromLeft (120)); row2.removeFromLeft (2);
+    pageNext.setBounds (row2.removeFromLeft (24)); row2.removeFromLeft (4);
+    followBtn.setBounds (row2.removeFromLeft (60)); row2.removeFromLeft (12);
+    grooveSlot.setBounds (row2.removeFromRight (380)); row2.removeFromRight (12);
+    timeline.setBounds (row2);
 
     r.removeFromTop (18); // column captions
 
     auto statusRow = r.removeFromBottom (26).reduced (10, 2);
     editorBtn.setBounds (statusRow.removeFromRight (96).reduced (0, 1));
     statusRow.removeFromRight (8);
+    bpmLabel.setBounds (statusRow.removeFromRight (280));
     status.setBounds (statusRow);
 
     laneEditor.setVisible (editorExpanded && ! showGroove);

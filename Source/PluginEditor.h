@@ -232,6 +232,13 @@ private:
     StepGrid steps;
     std::vector<std::unique_ptr<ParamStrip>> strips;
 
+    // How the lane plays: its own steps, right after another lane (follower), or as a bed.
+    juce::ComboBox playsBox;
+    juce::Slider fChance, fDelay, fDrift, fVel;
+    juce::Label modeInfo;
+    int shownMode = -1; // 0 steps, 1 follower, 2 bed
+    void rebuildPlaysBox();
+
     template <typename Fn> void edit (Fn&& fn);
 };
 
@@ -296,6 +303,21 @@ private:
     juce::Rectangle<int> gridArea;
 };
 
+// Drop-down panel with the less-used knobs (keeps the top bar clean).
+class SettingsPanel : public juce::Component
+{
+public:
+    SettingsPanel();
+    void addRow (juce::Component& c, const juce::String& caption);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    int preferredHeight() const { return 46 + (int) rows.size() * 34 + 10; }
+    juce::TextButton doneBtn { "Done" };
+
+private:
+    std::vector<std::pair<juce::Component*, juce::String>> rows;
+};
+
 // Full-window help screen.
 class HelpOverlay : public juce::Component
 {
@@ -334,6 +356,7 @@ private:
     juce::Label title, byline, status, bpmLabel, pageLabel;
     juce::TextButton helpBtn { "Help" }, setupsBtn { "Setups" }, libraryBtn { "Library..." }, shuffleBtn { "Shuffle samples" },
                      fitFilterBtn { "Fit filter" }, generateBtn { "Generate" }, mutateBtn { "Mutate" }, previewBtn { "Play" },
+                     settingsBtn { "Settings" }, randomBtn { "Randomize all" }, kitBtn { "Starter kit" },
                      seqBtn { "Sequencer" }, addLaneBtn { "+ Add lane" },
                      songBtn { "Song" }, makeSongBtn { "Make song" }, pagePrev { "<" }, pageNext { ">" }, followBtn { "Follow" },
                      editorBtn { "Lane editor" };
@@ -353,6 +376,7 @@ private:
     cg::SongTimeline timeline;
     cg::GrooveSlot grooveSlot;
     cg::GrooveView grooveView;
+    cg::SettingsPanel settings;
     bool showGroove = false;
     void setShowGroove (bool);
     int grooveReanalyzeIn = -1; // ticks until the reference is analyzed again at the new BPM

@@ -11,7 +11,8 @@ const char* const kFallback[kNumRoles] = {
     "x000x000x000x000", "0000x0000000x000", "0000x0000000x000", "13x313x313x313x3",
     "0040004000400050", "0050005000500050", "3000000000000000", "5555555555555555",
     "0030020000300200", "0000000000000030", "0003000000300030", "0101010101010101",
-    "4000000000000000", "2000000000000000", "00x000x000x000x0", "0020020020020020"
+    "4000000000000000", "2000000000000000", "00x000x000x000x0", "0020020020020020",
+    "0000000000000000", "0000000000000000", "0000000000000000" // Foley, Bed, Vox: generated their own way
 };
 
 struct GenreDef
@@ -22,57 +23,70 @@ struct GenreDef
     double bpm;      // typical tempo, used for preview
     float roll;      // chance of hat/perc rolls (ratchets), e.g. trap
     const char* pat[kNumRoles]; // nullptr = fallback
+    float foliage;   // 0..1 how much quiet off-grid foley the genre wants
 };
 
 const GenreDef kGenres[] = {
     { "House", 0.12f, 0.0f, 124.0, 0.0f,
       { nullptr, nullptr, nullptr, "13x313x313x313x3", "00700070007000x0", nullptr, nullptr, "4646464646464646",
-        "0030040000300400", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr } },
+        "0030040000300400", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr }, 0.3f },
     { "Deep House", 0.22f, 0.0f, 120.0, 0.0f,
       { nullptr, "0000300000003000", nullptr, "02x202x202x202x2", "0030003000300040", nullptr, nullptr, "3535353535353535",
-        "0020030000200300", nullptr, "0004000200040002", nullptr, nullptr, nullptr, "00x000x000x0003x", nullptr } },
+        "0020030000200300", nullptr, "0004000200040002", nullptr, nullptr, nullptr, "00x000x000x0003x", nullptr }, 0.4f },
     { "Tech House", 0.10f, 0.0f, 126.0, 0.0f,
       { nullptr, "0000000000000000", nullptr, "25x525x525x525x5", "00x000x000x000x0", nullptr, nullptr, nullptr,
-        "0050060030050060", nullptr, "0300030003000304", nullptr, nullptr, nullptr, "0xx50xx50xx50xx5", nullptr } },
+        "0050060030050060", nullptr, "0300030003000304", nullptr, nullptr, nullptr, "0xx50xx50xx50xx5", nullptr }, 0.3f },
     { "Minimal", 0.18f, 0.05f, 125.0, 0.0f,
       { nullptr, "0000000000000000", "0000500000005000", "02x302x302x302x3", "0000000000000040", nullptr, nullptr, "2323232323232323",
-        "0030000200300002", nullptr, "0004000000030004", "2131213121312131", nullptr, nullptr, nullptr, nullptr } },
+        "0030000200300002", nullptr, "0004000000030004", "2131213121312131", nullptr, nullptr, nullptr, nullptr }, 0.5f },
     { "Techno", 0.03f, 0.0f, 132.0, 0.0f,
       { nullptr, "0000000000000000", "0000400000004000", "57x757x757x757x7", "00x000x000x000x0", "30x030x030x030x0", nullptr, nullptr,
-        "0040003000400030", "0000000000300040", nullptr, "1111111111111111", nullptr, nullptr, "0x500x500x500x50", nullptr } },
+        "0040003000400030", "0000000000300040", nullptr, "1111111111111111", nullptr, nullptr, "0x500x500x500x50", nullptr }, 0.3f },
     { "Dub Techno", 0.08f, 0.0f, 120.0, 0.0f,
       { nullptr, "0000000000000000", "0000300000003000", "03x303x303x303x3", "0000000000000030", "0050005000500060", nullptr, "2424242424242424",
-        "0000020000000300", nullptr, "0000000300000002", nullptr, "x000000000000000", nullptr, "0x000x000x000x00", nullptr } },
+        "0000020000000300", nullptr, "0000000300000002", nullptr, "x000000000000000", nullptr, "0x000x000x000x00", nullptr }, 0.5f },
     { "Breaks", 0.08f, 0.05f, 130.0, 0.0f,
       { "x0x0000000xx0000", "0000x0030400x030", "0000300000003000", "x3x3x3x3x3x3x3x3", "0000000000000040", "5050505050505050", nullptr, nullptr,
-        "0020030020030020", "0000000000000304", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr } },
+        "0020030020030020", "0000000000000304", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr }, 0.3f },
     { "UK Garage", 0.38f, 0.0f, 132.0, 0.0f,
       { "x000000000x00300", nullptr, nullptr, "02x402x302x402x3", "0000000000000040", nullptr, nullptr, "4545454545454545",
-        "0030003000300030", nullptr, "0004000300040003", nullptr, nullptr, nullptr, "x00000x000x00000", nullptr } },
+        "0030003000300030", nullptr, "0004000300040003", nullptr, nullptr, nullptr, "x00000x000x00000", nullptr }, 0.3f },
     { "IDM", 0.05f, 0.85f, 120.0, 0.0f,
       { "x000003000x00000", "0000600000006003", "0000300000003000", "3535353535353535", "0000003000000030", "3030303030303030", nullptr, "3333333333333333",
-        "0302030203020302", "0000200000002030", "0203020302030203", "3434343434343434", nullptr, nullptr, "x0003000x0000300", "0303030303030303" } },
+        "0302030203020302", "0000200000002030", "0203020302030203", "3434343434343434", nullptr, nullptr, "x0003000x0000300", "0303030303030303" }, 0.6f },
     { "Ambient", 0.10f, 0.25f, 90.0, 0.0f,
       { "6000000040000000", "0000000000000000", "0000000000002000", "0020002000200020", "0000000000000000", "0020000000200000", nullptr, "2020202020202020",
-        "0010002000100020", "0000000000000000", "0000000000000000", "1010101010101010", "x000000000000000", "3000000000000000", "5000000000000000", nullptr } },
+        "0010002000100020", "0000000000000000", "0000000000000000", "1010101010101010", "x000000000000000", "3000000000000000", "5000000000000000", nullptr }, 0.6f },
     { "Drum & Bass", 0.03f, 0.0f, 174.0, 0.03f,
       { "x000000000x00000", "0000x0000000x000", "0000300000003000", "x2x2x2x2x2x2x2x2", "0000000000000040", "5050505050505050", nullptr, "4444444444444444",
-        "0020002000200020", "0000000000000030", "0002000300020003", nullptr, nullptr, nullptr, "x000000000x00000", nullptr } },
+        "0020002000200020", "0000000000000030", "0002000300020003", nullptr, nullptr, nullptr, "x000000000x00000", nullptr }, 0.3f },
     { "Jungle", 0.06f, 0.1f, 165.0, 0.05f,
       { "x0x0000000xx0000", "0000x0040400x030", "0000300000003000", "x3x3x3x3x3x3x3x3", "0000000000000040", "5050505050505050", nullptr, nullptr,
-        "0020030020030020", "0000000000000304", "0003000200030002", nullptr, nullptr, nullptr, "x000000000x00000", nullptr } },
+        "0020030020030020", "0000000000000304", "0003000200030002", nullptr, nullptr, nullptr, "x000000000x00000", nullptr }, 0.3f },
     { "Dubstep / Halftime", 0.05f, 0.0f, 140.0, 0.04f,
       { "x000000000300000", "00000000x0000000", "00000000x0000000", "x3x3x3x3x3x3x3x3", "0000000000000030", "3030303030303030", nullptr, "2323232323232323",
-        "0003000000300003", "0000000000000030", "0000000300000003", nullptr, nullptr, nullptr, "x00000000x000000", nullptr } },
+        "0003000000300003", "0000000000000030", "0000000300000003", nullptr, nullptr, nullptr, "x00000000x000000", nullptr }, 0.3f },
     { "Trap", 0.0f, 0.0f, 140.0, 0.16f,
       { "x000000x00x00000", "00000000x0000000", "00000000x0000000", "xxxxxxxxxxxxxxxx", "0000000000000300", nullptr, nullptr, nullptr,
-        "0000030000000300", "0000000000000020", "0004000000040000", nullptr, nullptr, nullptr, "x000000x00x00000", nullptr } },
+        "0000030000000300", "0000000000000020", "0004000000040000", nullptr, nullptr, nullptr, "x000000x00x00000", nullptr }, 0.3f },
     { "Hip-hop / Boom bap", 0.5f, 0.0f, 90.0, 0.0f,
       { "x0000003x0x00000", "0000x0000000x000", "0000x0000000x000", "x2x2x2x2x2x2x2x2", "0000000000000030", nullptr, nullptr, "3333333333333333",
-        "0020000000200000", nullptr, "0000000300000003", nullptr, nullptr, nullptr, "x00000x0x0000000", nullptr } },
+        "0020000000200000", nullptr, "0000000300000003", nullptr, nullptr, nullptr, "x00000x0x0000000", nullptr }, 0.3f },
     { "Downtempo", 0.3f, 0.1f, 100.0, 0.0f,
       { "x000000040x00000", "0000x0000000x000", "0000300000003000", "02x202x202x202x2", "0000000000000030", "0030003000300030", nullptr, "2424242424242424",
-        "0010002000100020", "0000000000000020", "0000000200000002", nullptr, "x000000000000000", nullptr, "x000000030000000", nullptr } },
+        "0010002000100020", "0000000000000020", "0000000200000002", nullptr, "x000000000000000", nullptr, "x000000030000000", nullptr }, 0.4f },
+    // Microhouse / Perlon-style minimal: clicks, cut-up micro hits, rims and percs talking to each other.
+    { "Microhouse", 0.14f, 0.15f, 124.0, 0.02f,
+      { nullptr, "0000000000000000", "0000400000004000", "02x302x302x302x3", "0000000000000030", nullptr, nullptr, "2323232323232323",
+        "0300203003002030", nullptr, "0040002000300024", "3232323232323232", nullptr, nullptr, "0x000x300x000x03", nullptr }, 0.8f },
+    // Deep and dusty (Giegling direction): soft kick, hazy hats, sparse perc, a lot of trailing foley.
+    { "Deep & dusty", 0.18f, 0.1f, 120.0, 0.0f,
+      { nullptr, "0000000000000000", "0000500000005000", "03x203x203x203x2", "0040004000400050", "0030003000300030", nullptr, "3434343434343434",
+        "0020030000200300", nullptr, "0003000200030002", nullptr, nullptr, nullptr, "00x000x000x0003x", nullptr }, 0.9f },
+    // 2-step / future garage (Burial direction): shuffled kick and snare, swung hats, foley tied to the snare.
+    { "2-step / future garage", 0.42f, 0.1f, 138.0, 0.03f,
+      { "x000000300x00000", "0000x0000000x000", "0000600000006000", "02x402x302x402x3", "0000000000000040", nullptr, nullptr, "4545454545454545",
+        "0030003000300030", nullptr, "0004000300040003", nullptr, nullptr, nullptr, "x00000x000x00000", nullptr }, 1.0f },
 };
 
 constexpr int kNumTemplateGenres = (int) (sizeof (kGenres) / sizeof (kGenres[0]));
@@ -167,6 +181,59 @@ std::array<float, 16> referenceTemplate (const Groove& gr, Role role)
     return t;
 }
 
+float genreFoliage (int g)
+{
+    if (g >= 0 && g < kNumTemplateGenres) return kGenres[g].foliage;
+    return g == Free ? 0.5f : 0.3f;
+}
+
+// Foley: sparse, quiet, off the grid (1/32 steps nudged anywhere), a different bit of the sample each time.
+static void generateFoley (Lane& lane, const GenSettings& s, float foliage, juce::Random& rng)
+{
+    for (auto& st : lane.steps) st = Step {};
+    lane.rate = 7; // 1/32
+    lane.length = juce::jlimit (32, kMaxSteps, juce::jlimit (1, 32, s.bars) * 32);
+    lane.swing = 0.0f;
+    lane.humanize = 0.5f;
+    const float density = (0.03f + 0.09f * juce::jlimit (0.0f, 1.0f, s.density)) * (0.5f + foliage);
+    for (int i = 0; i < lane.length; ++i)
+    {
+        if (rng.nextFloat() >= density) continue;
+        auto& st = lane.steps[(size_t) i];
+        st.on = true;
+        st.vel = 0.12f + rng.nextFloat() * 0.33f;
+        st.prob = 0.35f + rng.nextFloat() * 0.5f;
+        st.nudge = (rng.nextFloat() - 0.5f) * 0.9f;
+        st.start = rng.nextFloat() * 0.5f;
+        st.pitch = (rng.nextFloat() - 0.5f) * 3.0f;
+        st.pan = (rng.nextFloat() - 0.5f) * 0.8f;
+        st.cutoff = 0.6f + rng.nextFloat() * 0.4f;
+    }
+}
+
+// Vocal chops: a few hits off the beat, each from a different part of the sample.
+static void generateVox (Lane& lane, const GenSettings& s, juce::Random& rng)
+{
+    for (auto& st : lane.steps) st = Step {};
+    lane.rate = kRate16;
+    lane.length = juce::jlimit (32, kMaxSteps, juce::jlimit (2, 64, s.bars) * 16);
+    lane.swing = 0.2f;
+    static const float pitches[] = { 0.0f, 0.0f, 0.0f, -5.0f, 7.0f, -12.0f, 5.0f };
+    const int perPhrase = 1 + rng.nextInt (3);
+    for (int phrase = 0; phrase < lane.length / 32; ++phrase)
+        for (int h = 0; h < perPhrase; ++h)
+        {
+            const int pos = phrase * 32 + (rng.nextInt (16) * 2 + 1) % 32;
+            auto& st = lane.steps[(size_t) pos];
+            st.on = true;
+            st.vel = 0.5f + rng.nextFloat() * 0.35f;
+            st.prob = 0.5f + rng.nextFloat() * 0.4f;
+            st.start = rng.nextFloat() * 0.9f;
+            st.pitch = pitches[rng.nextInt (7)];
+            st.nudge = (rng.nextFloat() - 0.5f) * 0.3f;
+        }
+}
+
 double genreBpm (int g)
 {
     if (g >= 0 && g < kNumTemplateGenres) return kGenres[g].bpm;
@@ -196,6 +263,11 @@ void generateLane (Lane& lane, const GenSettings& s, juce::Random& rng)
     const auto& def  = kGenres[(freeMode || refMode) ? 0 : juce::jlimit (0, kNumTemplateGenres - 1, g)];
     const Role  role = lane.role;
     const int   ri   = (int) role;
+
+    if (lane.follow >= 0) return;                  // followers play after their leader, not on steps
+    if (role == Role::Bed) { clearSteps (lane); lane.length = 16; lane.rate = kRate16; return; } // runs underneath, no steps
+    if (role == Role::Foley) { generateFoley (lane, s, (freeMode || refMode) ? 0.6f : def.foliage, rng); return; }
+    if (role == Role::Vox) { generateVox (lane, s, rng); return; }
 
     // Build the 16-step probability template for this lane.
     std::array<float, 16> tpl {};
@@ -468,7 +540,10 @@ Role guessRole (const juce::String& nameIn)
     if (contains ({ "tom" }))                                                                                    return Role::Tom;
     if (contains ({ "rim", "stick" }))                                                                           return Role::Rim;
     if (contains ({ "click", "glitch", "tick", "blip" }))                                                        return Role::Click;
-    if (contains ({ "texture", "atmos", "ambien", "noise", "foley", "field" }))                                   return Role::Texture;
+    if (contains ({ "vinyl", "crackle", "rain", "hiss", "room tone", "roomtone", "bed", "drone", "noise floor" }))  return Role::Bed;
+    if (contains ({ "foley", "field", "rustle", "found", "household", "paper", "cloth", "keys" }))                return Role::Foley;
+    if (contains ({ "vocal", "vox", "voice", "chop", "acapella", "acappella" }))                                  return Role::Vox;
+    if (contains ({ "texture", "atmos", "ambien", "noise" }))                                                     return Role::Texture;
     if (contains ({ "riser", "impact", "sweep", "effect" }) || hasToken ({ "fx", "sfx" }))                       return Role::FX;
     if (contains ({ "bass", "808", "sub" }))                                                                     return Role::Bass;
     if (contains ({ "perc", "conga", "bongo", "cowbell", "clave", "wood", "block", "shot" }))                     return Role::Perc;

@@ -300,6 +300,22 @@ int main (int argc, char** argv)
         }
         CHECK (fresh.lanes[0].folder == p.lanes[0].folder && fresh.lanes[0].files.size() == p.lanes[0].files.size(),
                "a new Groovebox remembers the last folders (background scan finished)");
+
+        // A Groovebox in an old project keeps that project's setup, not the last session.
+        {
+            GrooveboxProcessor proj;
+            proj.runSynchronously = true;
+            proj.lanes[0].name = "project kick";
+            proj.lanes[0].folder = juce::File();
+            juce::MemoryBlock mb;
+            proj.getStateInformation (mb);
+            GrooveboxProcessor opened;
+            opened.setStateInformation (mb.getData(), (int) mb.getSize());
+            for (int i = 0; i < 100; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            std::unique_ptr<juce::AudioProcessorEditor> ed (opened.createEditor());
+            CHECK (opened.lanes[0].name == "project kick" && opened.lanes[0].folder != p.lanes[0].folder,
+                   "an old project's Groovebox keeps the project's setup (last session not loaded)");
+        }
         GrooveboxProcessor::lastSessionFile().deleteFile();
     }
 
@@ -698,6 +714,112 @@ int main (int argc, char** argv)
         CHECK (p.undo() && p.numLanes.load() == before && p.lanes[1].name == nextName, "Ctrl+Z undoes the duplicate");
     }
 
+    // 24. Foliage: followers, beds, foley, starter kits, randomize
+    {
+        GrooveboxProcessor f;
+        f.runSynchronously = true;
+        FakeHead fh;
+        f.setPlayHead (&fh);
+        f.prepareToPlay (48000.0, 512);
+        f.scanLibrary (root);
+        f.gen.genre = cg::FutureGarage;
+        f.applyStarterKit (cg::FutureGarage);
+        int followers = 0, beds = 0, snareLane = -1, follLane = -1;
+        for (int i = 0; i < f.numLanes.load(); ++i)
+        {
+            const auto& l = f.lanes[(size_t) i];
+            if (l.follow >= 0) ++followers;
+            if (l.isBed()) ++beds;
+            if (l.role == cg::Role::Snare) snareLane = i;
+            if (l.follow >= 0 && l.follow == snareLane && follLane < 0) follLane = i;
+        }
+        std::cout << "  kit: " << f.numLanes.load() << " lanes, " << followers << " followers, " << beds << " beds\n";
+        CHECK (f.numLanes.load() >= 12 && followers >= 3 && beds >= 2 && follLane >= 0, "2-step starter kit: core drums, followers and beds");
+        CHECK (f.lanes[0].sample != nullptr && f.lanes[0].name == "Kick", "kit lanes filled from the library");
+
+        // A follower answers its leader's hits, a little later, quieter.
+        auto& leader = f.lanes[(size_t) snareLane];
+        auto& fl = f.lanes[(size_t) follLane];
+        for (auto& st : leader.steps) st = cg::Step {};
+        leader.length = 16; leader.rate = cg::kRate16; leader.swing = 0; leader.humanize = 0;
+        leader.steps[4].on = true; leader.steps[12].on = true;
+        fl.followChance = 1.0f; fl.followDelay = 50.0f; fl.followDrift = 0.0f; fl.followVel = 0.5f;
+        std::vector<std::pair<double, float>> lh, fhits;
+        cg::forEachHit (f.lanes.data(), f.numLanes.load(), snareLane, 1, 0.0, 4.0, 120.0, 1.0f, 0.0f,
+                        [&] (double t, float v, const cg::Step&, double) { lh.push_back ({ t, v }); });
+        cg::forEachHit (f.lanes.data(), f.numLanes.load(), follLane, 1, 0.0, 4.0, 120.0, 1.0f, 0.0f,
+                        [&] (double t, float v, const cg::Step&, double) { fhits.push_back ({ t, v }); });
+        const double expect = 0.050 * 120.0 / 60.0; // 50 ms in beats
+        CHECK (lh.size() == 2 && fhits.size() == 2 && std::abs ((fhits[0].first - lh[0].first) - expect) < 1.0e-6
+               && fhits[0].second < lh[0].second, "a follower plays 50 ms after each leader hit, quieter");
+        fl.followChance = 0.3f; fl.followDrift = 0.5f;
+        int answered = 0;
+        cg::forEachHit (f.lanes.data(), f.numLanes.load(), follLane, 1, 0.0, 400.0, 120.0, 1.0f, 0.0f,
+                        [&] (double, float, const cg::Step&, double) { ++answered; });
+        CHECK (answered > 30 && answered < 90, "follow chance 30% answers about 30% of 200 hits (" + juce::String (answered) + ")");
+
+        // Follower notes go along when a lane is sent to FL.
+        f.songMode = false;
+        const auto mid = f.exportLaneMidi (follLane);
+        juce::MidiFile mf; juce::FileInputStream in (mid); mf.readFrom (in);
+        int ons = 0;
+        for (int t = 0; t < mf.getNumTracks(); ++t) for (auto* ev : *mf.getTrack (t)) if (ev->message.isNoteOn()) ++ons;
+        CHECK (ons > 0, "follower lane exports its answers as notes (" + juce::String (ons) + ")");
+
+        // A bed plays continuously while the music runs, and fades out when it stops.
+        int bedLane = -1;
+        for (int i = 0; i < f.numLanes.load(); ++i) if (f.lanes[(size_t) i].isBed() && f.lanes[(size_t) i].sample != nullptr) bedLane = i;
+        if (bedLane < 0)
+        {
+            for (int i = 0; i < f.numLanes.load(); ++i) if (f.lanes[(size_t) i].isBed()) bedLane = i;
+            f.setLaneFolder (bedLane, root.getChildFile ("Textures"), false);
+        }
+        CHECK (bedLane >= 0 && f.lanes[(size_t) bedLane].sample != nullptr, "bed lane has a texture");
+        for (int i = 0; i < f.numLanes.load(); ++i) f.lanes[(size_t) i].mute = i != bedLane;
+        fh.playing = true;
+        const float onPeak = render (f, fh, 2.0, nullptr);
+        fh.playing = false;
+        render (f, fh, 2.0, nullptr);
+        const float offPeak = render (f, fh, 0.3, nullptr);
+        CHECK (onPeak > 0.001f && offPeak < 0.0005f, "bed plays while running (" + juce::String (onPeak, 4) + ") and fades out when stopped ("
+               + juce::String (offPeak, 5) + ")");
+        for (int i = 0; i < f.numLanes.load(); ++i) f.lanes[(size_t) i].mute = false;
+
+        // Foley lanes: sparse, quiet, off the grid.
+        cg::Lane fo; fo.role = cg::Role::Foley;
+        juce::Random fr (5);
+        f.gen.bars = 2;
+        cg::generateLane (fo, f.gen, fr);
+        int on = 0; bool offGrid = false; float maxVel = 0;
+        for (int i = 0; i < fo.length; ++i)
+            if (fo.steps[(size_t) i].on) { ++on; offGrid = offGrid || std::abs (fo.steps[(size_t) i].nudge) > 0.1f; maxVel = juce::jmax (maxVel, fo.steps[(size_t) i].vel); }
+        CHECK (fo.rate == 7 && on > 0 && on < fo.length / 3 && offGrid && maxVel < 0.5f, "foley pattern: sparse, quiet, nudged off the grid ("
+               + juce::String (on) + " hits)");
+
+        // Undo and state keep follow settings; removing a lane keeps followers pointing at the same lane.
+        auto xml = f.createStateXml();
+        GrooveboxProcessor g2; g2.runSynchronously = true; g2.applyStateXml (*xml);
+        CHECK (g2.lanes[(size_t) follLane].follow == snareLane && std::abs (g2.lanes[(size_t) follLane].followDelay - 50.0f) < 0.01f,
+               "follow settings saved with the setup");
+        f.removeLane (0);
+        CHECK (f.lanes[(size_t) follLane - 1].follow == snareLane - 1, "removing a lane keeps followers on their leader");
+
+        // Randomize all: new samples (and maybe instruments), locked lanes untouched.
+        f.lanes[0].lockSample = true; f.lanes[0].lockPattern = true;
+        const auto lockedFile = f.lanes[0].sample != nullptr ? f.lanes[0].sample->file : juce::File();
+        const auto lockedPat = laneString (f.lanes[0]);
+        f.randomizeAll();
+        CHECK ((f.lanes[0].sample != nullptr ? f.lanes[0].sample->file : juce::File()) == lockedFile && laneString (f.lanes[0]) == lockedPat,
+               "Randomize all leaves a locked lane alone");
+
+        // Old setups keep their genre after the three new genres were added.
+        auto old = f.createStateXml();
+        old->setAttribute ("version", 3);
+        old->setAttribute ("genre", 16); // Hybrid before 0.7
+        f.applyStateXml (*old);
+        CHECK (f.gen.genre == cg::Hybrid, "old setups keep their genre (Hybrid)");
+    }
+
     // 22. Scrubbing the song
     {
         p.makeSong (64);
@@ -747,6 +869,27 @@ int main (int argc, char** argv)
             hf.deleteFile();
             juce::FileOutputStream hs (hf);
             juce::PNGImageFormat().writeImageToStream (himg, hs);
+        }
+        {
+            q.lanes[5].follow = 1;
+            q.lanes[5].role = cg::Role::Foley;
+            q.lanes[6].role = cg::Role::Bed;
+            cg::ViewState vs;
+            cg::LaneEditor le (q, vs);
+            le.setSize (1380, 290);
+            le.setLane (5);
+            le.resized();
+            auto limg = le.createComponentSnapshot (le.getLocalBounds(), true, 1.0f);
+            auto lf = outDir.getChildFile ("follower.png");
+            lf.deleteFile();
+            juce::FileOutputStream ls (lf);
+            juce::PNGImageFormat().writeImageToStream (limg, ls);
+            ed->setSize (1400, 800);
+            auto img2 = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto f2 = outDir.getChildFile ("ui2.png");
+            f2.deleteFile();
+            juce::FileOutputStream os2 (f2);
+            juce::PNGImageFormat().writeImageToStream (img2, os2);
         }
         {
             cg::GrooveView gv (q);

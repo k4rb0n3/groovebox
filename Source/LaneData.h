@@ -35,7 +35,11 @@ enum class LaneMode { Sample, FLChannel };
 enum class Role
 {
     Kick, Snare, Clap, ClosedHat, OpenHat, Ride, Cymbal, Shaker,
-    Perc, Tom, Rim, Click, Texture, FX, Bass, Other, NumRoles
+    Perc, Tom, Rim, Click, Texture, FX, Bass, Other,
+    Foley, // small off-grid sounds: rustles, ticks, breaths, often trailing other hits
+    Bed,   // a texture that runs underneath: vinyl crackle, rain, room tone, hiss (no steps)
+    Vox,   // vocal chops
+    NumRoles
 };
 
 constexpr int kNumRoles = (int) Role::NumRoles;
@@ -43,7 +47,7 @@ constexpr int kNumRoles = (int) Role::NumRoles;
 inline const char* roleName (Role r)
 {
     static const char* names[] = { "Kick", "Snare", "Clap", "Closed Hat", "Open Hat", "Ride", "Cymbal", "Shaker",
-                                   "Perc", "Tom", "Rim", "Click", "Texture", "FX", "Bass", "Other" };
+                                   "Perc", "Tom", "Rim", "Click", "Texture", "FX", "Bass", "Other", "Foley", "Bed", "Vox" };
     return names[juce::jlimit (0, kNumRoles - 1, (int) r)];
 }
 
@@ -51,7 +55,7 @@ inline juce::Colour roleColour (Role r)
 {
     static const juce::uint32 cols[] = { 0xffe8664a, 0xffe8a24a, 0xffe8c94a, 0xff9fd36a, 0xff6ad38e, 0xff6ad3c8,
                                          0xff6ab4d3, 0xff6a8fd3, 0xff8f6ad3, 0xffc06ad3, 0xffd36aa8, 0xffd36a6a,
-                                         0xffa0a0a0, 0xffc8b48c, 0xffe87a9a, 0xff8c8c8c };
+                                         0xffa0a0a0, 0xffc8b48c, 0xffe87a9a, 0xff8c8c8c, 0xffb7a06a, 0xff7f8fa3, 0xffd38ac0 };
     return juce::Colour (cols[juce::jlimit (0, kNumRoles - 1, (int) r)]);
 }
 
@@ -102,6 +106,15 @@ struct Lane
     int   choke = 0;        // 0 = none, 1..4 groups
     int   out   = -1;       // -1 = own output (lane index), else output pair 0..31 (0 = Main)
 
+    // Follower: instead of its own steps, the lane plays just after another lane's hits.
+    int   follow       = -1;    // lane it follows, -1 = plays its own steps
+    float followChance = 0.35f; // 0..1 how often it answers a hit
+    float followDelay  = 40.0f; // ms after the leader's hit (5..400)
+    float followDrift  = 0.35f; // 0..1 random spread of the delay, sample start and pitch
+    float followVel    = 0.5f;  // 0..1 level relative to the leader's hit
+
+    bool isBed() const { return role == Role::Bed; }
+
     juce::File folder;
     juce::Array<juce::File> files;
     int fileIndex = -1;
@@ -131,7 +144,7 @@ inline int bandFor (Role r)
     {
         case Role::Kick: case Role::Bass: case Role::Tom: return 0;
         case Role::ClosedHat: case Role::OpenHat: case Role::Ride: case Role::Cymbal:
-        case Role::Shaker: case Role::Click: return 2;
+        case Role::Shaker: case Role::Click: case Role::Bed: return 2;
         default: return 1;
     }
 }
@@ -243,6 +256,53 @@ void collectEvents (const Lane& lane, int laneIndex, juce::uint32 seed, double f
                 fn (tr, vr, st, (double) k * sb);
         }
     }
+}
+
+// Every hit of lane `li` in [from, to): its own steps, or (for a follower) answers to its leader's hits.
+// Beds have no hits. clipTotal > 0: export mode, every step of a loop of clipTotal beats exactly once.
+template <typename Fn>
+void forEachHit (const Lane* lanes, int numLanes, int li, juce::uint32 seed, double from, double to,
+                 double bpm, float swingScale, float humanizeScale, Fn&& fn, double clipTotal = 0.0,
+                 const Groove* groove = nullptr, float grooveAmount = 0.0f)
+{
+    const auto& lane = lanes[li];
+    if (lane.isBed())
+        return;
+
+    const bool clip = clipTotal > 0.0;
+    const int f = lane.follow;
+    if (f >= 0 && f < numLanes && f != li && lanes[f].follow < 0 && ! lanes[f].isBed())
+    {
+        const auto& leader = lanes[f];
+        const double delayBeats = juce::jlimit (1.0, 1000.0, (double) lane.followDelay) / 1000.0 * bpm / 60.0;
+        const float drift = juce::jlimit (0.0f, 1.0f, lane.followDrift);
+        const double maxShift = delayBeats * (1.0 + drift) + 1.0e-9;
+        const auto leaderClip = clip ? (juce::int64) std::ceil (clipTotal / leader.stepBeats() - 1.0e-9) : (juce::int64) -1;
+
+        collectEvents (leader, f, seed, from - maxShift, to, bpm, swingScale, humanizeScale,
+                       [&] (double t, float v, const Step& lst, double grid)
+                       {
+                           const auto key = (juce::int64) std::llround (t * 960.0);
+                           if (hash01 (seed, li, key, 7) >= lane.followChance)
+                               return;
+                           const double t2 = t + delayBeats * (1.0 + (double) drift * (hash01 (seed, li, key, 8) * 2.0 - 1.0));
+                           if (! clip && (t2 < from || t2 >= to))
+                               return;
+                           Step st;
+                           st.on = true;
+                           st.start = drift * 0.3f * hash01 (seed, li, key, 9);            // a different bit of the sample
+                           st.pitch = drift * 1.5f * (hash01 (seed, li, key, 10) * 2.0f - 1.0f);
+                           st.pan   = drift * 0.5f * (hash01 (seed, li, key, 11) * 2.0f - 1.0f);
+                           juce::ignoreUnused (lst);
+                           const float vel = juce::jlimit (0.02f, 1.0f, v * lane.followVel * (0.75f + 0.5f * hash01 (seed, li, key, 12)));
+                           fn (t2, vel, st, grid);
+                       },
+                       leaderClip, groove, grooveAmount);
+        return;
+    }
+
+    const auto clipSteps = clip ? (juce::int64) std::ceil (clipTotal / lane.stepBeats() - 1.0e-9) : (juce::int64) -1;
+    collectEvents (lane, li, seed, from, to, bpm, swingScale, humanizeScale, std::forward<Fn> (fn), clipSteps, groove, grooveAmount);
 }
 
 } // namespace cg

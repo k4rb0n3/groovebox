@@ -269,6 +269,99 @@ void GrooveboxProcessor::renderVoice (Voice& v, float* oL, float* oR, int from, 
 
 }
 
+// Beds: textures that run underneath everything (crackle, rain, room tone), looped with a crossfade,
+// fading in and out with the transport and with song sections.
+void GrooveboxProcessor::renderBeds (std::array<float*, cg::kNumOuts>& outL, std::array<float*, cg::kNumOuts>& outR,
+                                     int n, bool running, bool song)
+{
+    const juce::SpinLock::ScopedLockType sl (lock);
+    const int nl = numLanes.load();
+    bool anySolo = false;
+    for (int li = 0; li < nl; ++li) anySolo = anySolo || lanes[(size_t) li].solo;
+    const int bar = currentBar.load();
+
+    for (int li = 0; li < kMaxLanes; ++li)
+    {
+        auto& b = beds[(size_t) li];
+        if (li >= nl) { b.gain = 0.0f; continue; }
+        const auto& lane = lanes[(size_t) li];
+        if (! lane.isBed() || lane.sample == nullptr || lane.sample->buffer.getNumSamples() < 256)
+        {
+            b.gain = 0.0f;
+            continue;
+        }
+        const bool audible = running && ! lane.mute && ! (anySolo && ! lane.solo) && (! song || laneActiveAtBar (li, bar));
+        const float target = audible ? 1.0f : 0.0f;
+        if (target == 0.0f && b.gain < 1.0e-5f) { b.gain = 0.0f; continue; }
+
+        const auto& smp = *lane.sample;
+        const int len = smp.buffer.getNumSamples();
+        const float* sL = smp.buffer.getReadPointer (0);
+        const float* sR = smp.buffer.getReadPointer (1);
+        const int xf = juce::jmax (16, juce::jmin (len / 4, (int) (smp.sampleRate * 0.3)));
+        const double ratio = std::pow (2.0, (double) pPitch[(size_t) li]->load() / 12.0) * smp.sampleRate / sr;
+        const float g = juce::Decibels::decibelsToGain (pLevel[(size_t) li]->load(), -60.0f);
+        const float angle = (juce::jlimit (-1.0f, 1.0f, pPan[(size_t) li]->load()) + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+        const float gl = g * std::cos (angle) * juce::MathConstants<float>::sqrt2;
+        const float gr = g * std::sin (angle) * juce::MathConstants<float>::sqrt2;
+
+        float a1 = 0, a2 = 0, a3 = 0, kk = 1;
+        const bool filt = lane.filter != FilterType::Off;
+        if (filt)
+        {
+            const float fc = juce::jlimit (20.0f, (float) (sr * 0.45), cutoffHz (pCutoff[(size_t) li]->load()));
+            const float gg = std::tan (juce::MathConstants<float>::pi * fc / (float) sr);
+            kk = 2.0f - 1.9f * juce::jlimit (0.0f, 1.0f, lane.reso);
+            a1 = 1.0f / (1.0f + gg * (gg + kk));
+            a2 = gg * a1;
+            a3 = gg * a2;
+        }
+
+        const int outIdx = juce::jlimit (0, kNumOuts - 1, lane.out < 0 ? li : lane.out);
+        float* oL = outL[(size_t) outIdx];
+        float* oR = outR[(size_t) outIdx];
+        const float k = 1.0f / (float) (sr * 0.4);
+        auto read = [len] (const float* d, double p)
+        {
+            const int ip = juce::jlimit (0, len - 2, (int) p);
+            const float fr = (float) (p - (double) ip);
+            return d[ip] + fr * (d[ip + 1] - d[ip]);
+        };
+
+        for (int i = 0; i < n; ++i)
+        {
+            b.gain += (target - b.gain) * k;
+            if (b.pos >= (double) len) b.pos -= (double) (len - xf);
+            float l = read (sL, b.pos), r = read (sR, b.pos);
+            if (b.pos >= (double) (len - xf))
+            {
+                const float a = (float) ((b.pos - (double) (len - xf)) / (double) xf);
+                const double q = b.pos - (double) (len - xf);
+                l = l * (1.0f - a) + read (sL, q) * a;
+                r = r * (1.0f - a) + read (sR, q) * a;
+            }
+            if (filt)
+            {
+                float* io[2] = { &l, &r };
+                for (int c = 0; c < 2; ++c)
+                {
+                    const float x = *io[c];
+                    const float v3 = x - b.ic2[c];
+                    const float v1 = a1 * b.ic1[c] + a2 * v3;
+                    const float v2 = b.ic2[c] + a2 * b.ic1[c] + a3 * v3;
+                    b.ic1[c] = 2.0f * v1 - b.ic1[c];
+                    b.ic2[c] = 2.0f * v2 - b.ic2[c];
+                    *io[c] = lane.filter == FilterType::LowPass ? v2 : lane.filter == FilterType::BandPass ? v1 : x - kk * v1 - v2;
+                }
+            }
+            oL[i] += l * gl * b.gain;
+            oR[i] += r * gr * b.gain;
+            b.pos += ratio;
+        }
+        laneMeter[(size_t) li] = juce::jmax (laneMeter[(size_t) li].load(), b.gain * 0.4f);
+    }
+}
+
 void GrooveboxProcessor::triggerVoice (int li, float vel, int offset, const Step& st)
 {
     const auto& lane = lanes[(size_t) li];
@@ -453,7 +546,7 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             if (lane.mode == LaneMode::Sample && lane.sample == nullptr)
                 continue;
 
-            collectEvents (lane, li, passSeed, ppq, ppqEnd, bpm, swingScale, humScale,
+            forEachHit (lanes.data(), nl, li, passSeed, ppq, ppqEnd, bpm, swingScale, humScale,
                            [&] (double t, float v, const Step& st, double grid)
                            {
                                if (song && ! laneActiveAtBar (li, (int) std::floor (grid / 4.0 + 1.0e-9)))
@@ -461,7 +554,7 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
                                const int off = juce::jlimit (0, n - 1, (int) ((t - ppq) / beatsPerSample));
                                fire (li, v, off, st, sb);
                            },
-                           -1, &groove, grooveAmount);
+                           0.0, &groove, grooveAmount);
         }
     }
 
@@ -494,6 +587,8 @@ void GrooveboxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (! v.active)
             v.smp.reset(); // never the last reference: lanes or `retired` still hold it
     }
+
+    renderBeds (outL, outR, n, running, song);
 
     if (! hostPlaying && preview)
         internalPpq = ppqEnd;
@@ -904,9 +999,252 @@ void GrooveboxProcessor::scanLibrary (const juce::File& root)
     });
 }
 
+//==============================================================================
+namespace
+{
+struct KitLane
+{
+    cg::Role role;
+    const char* name;
+    int follow = -1;          // index in the kit
+    float chance = 0.35f, delayMs = 40.0f, drift = 0.35f, vel = 0.5f;
+    float levelDb = -6.0f;
+};
+
+std::vector<KitLane> starterKit (int genre)
+{
+    using R = cg::Role;
+    switch (genre)
+    {
+        case cg::Microhouse:
+            return { { R::Kick, "Kick" }, { R::Clap, "Clap", -1, 0, 0, 0, 0, -8 }, { R::ClosedHat, "Hat", -1, 0, 0, 0, 0, -9 },
+                     { R::OpenHat, "Open hat", -1, 0, 0, 0, 0, -12 }, { R::Shaker, "Shaker", -1, 0, 0, 0, 0, -14 },
+                     { R::Rim, "Rim", -1, 0, 0, 0, 0, -10 }, { R::Click, "Clicks", -1, 0, 0, 0, 0, -14 }, { R::Perc, "Perc", -1, 0, 0, 0, 0, -11 },
+                     { R::Foley, "Foley after rim", 5, 0.35f, 25.0f, 0.4f, 0.55f, -12 },
+                     { R::Foley, "Foley after kick", 0, 0.25f, 70.0f, 0.5f, 0.35f, -14 },
+                     { R::Foley, "Foley loose", -1, 0, 0, 0, 0, -16 },
+                     { R::Bed, "Room / vinyl bed", -1, 0, 0, 0, 0, -22 } };
+        case cg::DeepDusty:
+            return { { R::Kick, "Kick" }, { R::Clap, "Clap", -1, 0, 0, 0, 0, -8 }, { R::ClosedHat, "Hat", -1, 0, 0, 0, 0, -10 },
+                     { R::OpenHat, "Open hat", -1, 0, 0, 0, 0, -13 }, { R::Ride, "Ride", -1, 0, 0, 0, 0, -15 },
+                     { R::Shaker, "Shaker", -1, 0, 0, 0, 0, -15 }, { R::Perc, "Perc", -1, 0, 0, 0, 0, -12 }, { R::Rim, "Rim", -1, 0, 0, 0, 0, -12 },
+                     { R::Foley, "Foley after clap", 1, 0.4f, 35.0f, 0.4f, 0.5f, -12 },
+                     { R::Foley, "Foley after kick", 0, 0.3f, 80.0f, 0.5f, 0.35f, -14 },
+                     { R::Foley, "Foley loose", -1, 0, 0, 0, 0, -16 },
+                     { R::Bed, "Crackle bed", -1, 0, 0, 0, 0, -20 }, { R::Bed, "Room tone bed", -1, 0, 0, 0, 0, -24 } };
+        case cg::FutureGarage:
+            return { { R::Kick, "Kick" }, { R::Snare, "Snare", -1, 0, 0, 0, 0, -7 }, { R::Clap, "Clap", -1, 0, 0, 0, 0, -10 },
+                     { R::ClosedHat, "Hat", -1, 0, 0, 0, 0, -10 }, { R::Shaker, "Shaker", -1, 0, 0, 0, 0, -14 },
+                     { R::Rim, "Rim", -1, 0, 0, 0, 0, -12 }, { R::Perc, "Perc", -1, 0, 0, 0, 0, -13 },
+                     { R::Foley, "Foley after snare", 1, 0.5f, 30.0f, 0.45f, 0.55f, -11 },
+                     { R::Foley, "Foley after kick", 0, 0.3f, 70.0f, 0.5f, 0.35f, -14 },
+                     { R::Foley, "Foley after hat", 3, 0.2f, 15.0f, 0.3f, 0.4f, -16 },
+                     { R::Foley, "Foley loose", -1, 0, 0, 0, 0, -16 },
+                     { R::Bed, "Rain bed", -1, 0, 0, 0, 0, -20 }, { R::Bed, "Crackle bed", -1, 0, 0, 0, 0, -22 },
+                     { R::Vox, "Vocal chops", -1, 0, 0, 0, 0, -10 } };
+        default:
+            return { { R::Kick, "Kick" }, { R::Snare, "Snare", -1, 0, 0, 0, 0, -8 }, { R::Clap, "Clap", -1, 0, 0, 0, 0, -8 },
+                     { R::ClosedHat, "Hat", -1, 0, 0, 0, 0, -9 }, { R::OpenHat, "Open hat", -1, 0, 0, 0, 0, -12 },
+                     { R::Ride, "Ride", -1, 0, 0, 0, 0, -14 }, { R::Shaker, "Shaker", -1, 0, 0, 0, 0, -14 },
+                     { R::Perc, "Perc", -1, 0, 0, 0, 0, -11 }, { R::Rim, "Rim", -1, 0, 0, 0, 0, -12 },
+                     { R::Foley, "Foley after clap", 2, 0.3f, 35.0f, 0.4f, 0.45f, -13 },
+                     { R::Foley, "Foley loose", -1, 0, 0, 0, 0, -16 },
+                     { R::Bed, "Texture bed", -1, 0, 0, 0, 0, -22 } };
+    }
+}
+} // namespace
+
+void GrooveboxProcessor::withLibrary (std::function<void()> then)
+{
+    if (! libraryDirs.empty() || ! libraryRoot.isDirectory())
+    {
+        then();
+        return;
+    }
+    if (runSynchronously)
+    {
+        libraryDirs = findLibraryFolders (libraryRoot);
+        then();
+        return;
+    }
+    ++ioBusy;
+    const auto root = libraryRoot;
+    const int gen = stateGeneration;
+    auto aliveFlag = alive;
+    io.addJob ([this, aliveFlag, root, gen, then]
+    {
+        auto dirs = findLibraryFolders (root);
+        juce::MessageManager::callAsync ([this, aliveFlag, gen, dirs, then]
+        {
+            if (! aliveFlag->load()) return;
+            --ioBusy;
+            if (gen != stateGeneration) return;
+            libraryDirs = dirs;
+            then();
+        });
+    });
+}
+
+static cg::Role dirRoleOf (const juce::File& d)
+{
+    auto r = cg::guessRole (d.getFileName());
+    return r != cg::Role::Other ? r : cg::guessRole (d.getParentDirectory().getFileName());
+}
+
+void GrooveboxProcessor::fillEmptyLanesFromLibrary()
+{
+    std::vector<int> useCount (libraryDirs.size(), 0);
+    for (int li = 0; li < numLanes; ++li)
+        for (size_t d = 0; d < libraryDirs.size(); ++d)
+            if (libraryDirs[d].first == lanes[(size_t) li].folder) ++useCount[d];
+
+    for (int li = 0; li < numLanes; ++li)
+    {
+        if (! lanes[(size_t) li].files.isEmpty() || lanes[(size_t) li].lockSample) continue;
+        // Foliage roles fall back to related folders when the library has none of their own.
+        const auto role = lanes[(size_t) li].role;
+        std::vector<Role> tryRoles { role };
+        if (role == Role::Bed)   tryRoles.push_back (Role::Texture);
+        if (role == Role::Foley) { tryRoles.push_back (Role::Click); tryRoles.push_back (Role::Perc); tryRoles.push_back (Role::Rim); }
+        int best = -1;
+        for (auto want : tryRoles)
+        {
+            for (size_t d = 0; d < libraryDirs.size(); ++d)
+                if (dirRoleOf (libraryDirs[d].first) == want && (best < 0 || useCount[d] < useCount[(size_t) best]))
+                    best = (int) d;
+            if (best >= 0) break;
+        }
+        if (best < 0) continue;
+        ++useCount[(size_t) best];
+        ++laneToken[(size_t) li];
+        const auto name = lanes[(size_t) li].name;
+        applyLaneFolder (li, libraryDirs[(size_t) best].first, libraryDirs[(size_t) best].second, false, {});
+        lanes[(size_t) li].name = name; // keep the kit's lane name ("Foley after snare")
+        loadSampleIndex (li, pickGoodSample (li));
+    }
+}
+
+void GrooveboxProcessor::applyStarterKit (int genre)
+{
+    const auto kit = starterKit (genre);
+    const int nl = numLanes.load();
+    const int k = juce::jmin ((int) kit.size(), kMaxLanes);
+
+    // Reuse samples you already picked for the same role.
+    std::vector<bool> taken ((size_t) nl, false);
+    std::vector<Lane> fresh ((size_t) k);
+    for (int i = 0; i < k; ++i)
+    {
+        const auto& kl = kit[(size_t) i];
+        auto& l = fresh[(size_t) i];
+        l.role = kl.role;
+        l.name = kl.name;
+        if (kl.follow >= 0)
+        {
+            l.follow = kl.follow;
+            l.followChance = kl.chance;
+            l.followDelay = kl.delayMs;
+            l.followDrift = kl.drift;
+            l.followVel = kl.vel;
+        }
+        if (kl.role == Role::ClosedHat || kl.role == Role::OpenHat) l.choke = 1;
+        for (int j = 0; j < nl; ++j)
+            if (! taken[(size_t) j] && lanes[(size_t) j].role == kl.role && lanes[(size_t) j].sample != nullptr)
+            {
+                taken[(size_t) j] = true;
+                const auto& o = lanes[(size_t) j];
+                l.folder = o.folder; l.files = o.files; l.fileIndex = o.fileIndex; l.sample = o.sample;
+                l.lockSample = o.lockSample;
+                break;
+            }
+    }
+
+    std::vector<SamplePtr> dropped;
+    std::vector<juce::Array<juce::File>> oldFiles;
+    {
+        const juce::SpinLock::ScopedLockType sl (lock);
+        for (int j = 0; j < kMaxLanes; ++j)
+        {
+            if (lanes[(size_t) j].sample != nullptr) dropped.push_back (lanes[(size_t) j].sample);
+            oldFiles.emplace_back();
+            lanes[(size_t) j].files.swapWith (oldFiles.back());
+            lanes[(size_t) j].sample = nullptr;
+        }
+        for (int i = 0; i < k; ++i)
+            std::swap (lanes[(size_t) i], fresh[(size_t) i]);
+        for (int j = k; j < kMaxLanes; ++j)
+            lanes[(size_t) j] = Lane {};
+        numLanes = k;
+        songMask.fill (0xffffffffu);
+    }
+    for (auto& d : dropped) retired.push_back (std::move (d));
+    for (auto& t : laneToken) ++t;
+
+    for (int i = 0; i < kMaxLanes; ++i)
+    {
+        resetLaneParams (i);
+        if (i < k)
+            if (auto* p = dynamic_cast<juce::RangedAudioParameter*> (apvts.getParameter (paramId (i, "level"))))
+                p->setValueNotifyingHost (p->convertTo0to1 (kit[(size_t) i].levelDb));
+    }
+
+    gen.genre = genre;
+    previewBpm = genreBpm (genre);
+    generateAll();
+    if (songMode.load()) makeSong (songBars);
+
+    withLibrary ([this] { fillEmptyLanesFromLibrary(); ++modelVersion; });
+    ++modelVersion;
+}
+
+void GrooveboxProcessor::randomizeAll()
+{
+    withLibrary ([this]
+    {
+        auto isDrum = [] (Role r) { return r != Role::Foley && r != Role::Bed && r != Role::Vox && r != Role::Texture
+                                        && r != Role::FX && r != Role::Other; };
+        for (int li = 0; li < numLanes; ++li)
+        {
+            auto& l = lanes[(size_t) li];
+            if (l.lockSample) continue;
+
+            // Mostly a different folder for the same instrument; sometimes a different instrument altogether.
+            std::vector<int> same, other;
+            for (size_t d = 0; d < libraryDirs.size(); ++d)
+            {
+                const auto r = dirRoleOf (libraryDirs[d].first);
+                if (r == l.role) same.push_back ((int) d);
+                else if (isDrum (r) && isDrum (l.role) && r != Role::Kick && l.role != Role::Kick) other.push_back ((int) d);
+            }
+            int pick = -1;
+            if (! other.empty() && rng.nextFloat() < 0.3f) pick = other[(size_t) rng.nextInt ((int) other.size())];
+            else if (! same.empty()) pick = same[(size_t) rng.nextInt ((int) same.size())];
+
+            if (pick >= 0 && libraryDirs[(size_t) pick].first != l.folder)
+            {
+                const auto r = dirRoleOf (libraryDirs[(size_t) pick].first);
+                const bool keepName = l.follow >= 0;
+                const auto name = l.name;
+                {
+                    const juce::SpinLock::ScopedLockType sl (lock);
+                    l.role = r;
+                }
+                ++laneToken[(size_t) li];
+                applyLaneFolder (li, libraryDirs[(size_t) pick].first, libraryDirs[(size_t) pick].second, false, {});
+                if (keepName) l.name = name;
+            }
+            if (! l.files.isEmpty())
+                loadSampleIndex (li, pickGoodSample (li));
+        }
+        generateAll();
+        ++modelVersion;
+    });
+}
+
 void GrooveboxProcessor::applyLibrary (const juce::File& root, const std::vector<std::pair<juce::File, juce::Array<juce::File>>>& dirs)
 {
     juce::ignoreUnused (root);
+    libraryDirs = dirs;
 
     auto dirRole = [] (const juce::File& d)
     {
@@ -1138,6 +1476,9 @@ int GrooveboxProcessor::duplicateLane (int li)
             lanes[(size_t) j] = std::move (lanes[(size_t) j - 1]);
         lanes[(size_t) li + 1] = std::move (dup);
         numLanes = nl + 1;
+        for (int j = 0; j <= nl; ++j) // followers keep following the same lane
+            if (j != li + 1 && lanes[(size_t) j].follow > li) ++lanes[(size_t) j].follow;
+        if (lanes[(size_t) li + 1].follow > li) ++lanes[(size_t) li + 1].follow;
         // The copy plays in the same song sections as the original.
         const juce::uint32 below = (1u << (li + 1)) - 1u;
         for (auto& m : songMask)
@@ -1170,6 +1511,12 @@ void GrooveboxProcessor::removeLane (int li)
             lanes[(size_t) j] = std::move (lanes[(size_t) j + 1]);
         lanes[(size_t) nl - 1] = Lane {};
         numLanes = nl - 1;
+        for (int j = 0; j < nl - 1; ++j) // followers keep following the same lane
+        {
+            auto& fo = lanes[(size_t) j].follow;
+            if (fo == li) fo = -1;
+            else if (fo > li) --fo;
+        }
         const juce::uint32 below = (1u << li) - 1u;
         for (auto& m : songMask) m = (m & below) | ((m >> 1) & ~below);
     }
@@ -1198,7 +1545,7 @@ juce::File GrooveboxProcessor::exportFolder()
 
 juce::File GrooveboxProcessor::exportMidi()
 {
-    struct Ev { double t; float v; int note; };
+    struct Ev { double t; float v; int note; double len = 0.0; };
     std::vector<Ev> events;
     events.reserve (4096);
 
@@ -1217,29 +1564,33 @@ juce::File GrooveboxProcessor::exportMidi()
         {
             const auto& lane = lanes[(size_t) li];
             if (lane.mute || (anySolo && ! lane.solo)) continue;
+            if (lane.isBed())
+            {
+                if (lane.sample != nullptr) events.push_back ({ 0.0, 0.8f, kBaseNote + li, total - 1.0 / 960.0 });
+                continue;
+            }
             // Every step exactly once, wrapped into the clip, so the MIDI loops seamlessly
             // (a step nudged early at the clip start lands at the clip end).
             if (song)
             {
                 // A song is not a loop: export it as it plays.
-                collectEvents (lane, li, seed, -1.0, total + 1.0, lastBpm.load(), swingScale, humScale,
+                forEachHit (lanes.data(), nl, li, seed, -1.0, total + 1.0, lastBpm.load(), swingScale, humScale,
                                [&] (double t, float v, const Step&, double grid)
                                {
                                    if (laneActiveAtBar (li, (int) std::floor (grid / 4.0 + 1.0e-9)))
                                        events.push_back ({ juce::jlimit (0.0, total - 1.0 / 960.0, t), v, kBaseNote + li });
                                },
-                               -1, &groove, grooveAmount);
+                               0.0, &groove, grooveAmount);
                 continue;
             }
-            const auto clipSteps = (juce::int64) std::ceil (total / lane.stepBeats() - 1.0e-9);
-            collectEvents (lane, li, seed, 0.0, total, lastBpm.load(), swingScale, humScale,
+            forEachHit (lanes.data(), nl, li, seed, 0.0, total, lastBpm.load(), swingScale, humScale,
                            [&] (double t, float v, const Step&, double)
                            {
                                t = std::fmod (t, total);
                                if (t < 0.0) t += total;
                                events.push_back ({ juce::jmin (t, total - 1.0 / 960.0), v, kBaseNote + li });
                            },
-                           clipSteps, &groove, grooveAmount);
+                           total, &groove, grooveAmount);
         }
     }
 
@@ -1250,7 +1601,7 @@ juce::File GrooveboxProcessor::exportMidi()
     for (const auto& e : events)
     {
         seq.addEvent (juce::MidiMessage::noteOn (1, e.note, juce::jlimit (0.01f, 1.0f, e.v)), e.t * tpq);
-        seq.addEvent (juce::MidiMessage::noteOff (1, e.note), (e.t + juce::jlimit (0.01, 0.125, total - e.t)) * tpq);
+        seq.addEvent (juce::MidiMessage::noteOff (1, e.note), (e.t + (e.len > 0.0 ? e.len : juce::jlimit (0.01, 0.125, total - e.t))) * tpq);
     }
     seq.updateMatchedPairs();
 
@@ -1370,7 +1721,7 @@ juce::File GrooveboxProcessor::exportLaneMidi (int li)
 {
     if (li < 0 || li >= numLanes) return {};
 
-    struct Ev { double t; float v; int note; };
+    struct Ev { double t; float v; int note; double len = 0.0; };
     std::vector<Ev> events;
     const bool song = songMode.load();
     const int bars = exportLengthBars();
@@ -1384,23 +1735,26 @@ juce::File GrooveboxProcessor::exportLaneMidi (int li)
         name = laneExportName (li);
         // FL's sampler plays a sample at its own pitch on C5 (MIDI 60); step pitch moves the note.
         auto noteFor = [] (const Step& st) { return juce::jlimit (0, 127, 60 + juce::roundToInt (st.pitch)); };
-        if (song)
-            collectEvents (lane, li, seed, -1.0, total + 1.0, lastBpm.load(), swingScale, humScale,
+        const int nl = numLanes.load();
+        if (lane.isBed())
+            events.push_back ({ 0.0, 0.8f, 60, total - 1.0 / 960.0 }); // one long note: the bed under everything
+        else if (song)
+            forEachHit (lanes.data(), nl, li, seed, -1.0, total + 1.0, lastBpm.load(), swingScale, humScale,
                            [&] (double t, float v, const Step& st, double grid)
                            {
                                if (laneActiveAtBar (li, (int) std::floor (grid / 4.0 + 1.0e-9)))
                                    events.push_back ({ juce::jlimit (0.0, total - 1.0 / 960.0, t), v, noteFor (st) });
                            },
-                           -1, &groove, grooveAmount);
+                           0.0, &groove, grooveAmount);
         else
-            collectEvents (lane, li, seed, 0.0, total, lastBpm.load(), swingScale, humScale,
+            forEachHit (lanes.data(), nl, li, seed, 0.0, total, lastBpm.load(), swingScale, humScale,
                            [&] (double t, float v, const Step& st, double)
                            {
                                t = std::fmod (t, total);
                                if (t < 0.0) t += total;
                                events.push_back ({ juce::jmin (t, total - 1.0 / 960.0), v, noteFor (st) });
                            },
-                           (juce::int64) std::ceil (total / lane.stepBeats() - 1.0e-9), &groove, grooveAmount);
+                           total, &groove, grooveAmount);
     }
 
     juce::MidiMessageSequence seq;
@@ -1411,7 +1765,7 @@ juce::File GrooveboxProcessor::exportLaneMidi (int li)
     for (const auto& e : events)
     {
         seq.addEvent (juce::MidiMessage::noteOn (1, e.note, juce::jlimit (0.01f, 1.0f, e.v)), e.t * tpq);
-        seq.addEvent (juce::MidiMessage::noteOff (1, e.note), (e.t + juce::jlimit (0.01, 0.125, total - e.t)) * tpq);
+        seq.addEvent (juce::MidiMessage::noteOff (1, e.note), (e.t + (e.len > 0.0 ? e.len : juce::jlimit (0.01, 0.125, total - e.t))) * tpq);
     }
     seq.updateMatchedPairs();
 
@@ -1530,7 +1884,7 @@ std::unique_ptr<juce::XmlElement> GrooveboxProcessor::createStateXml()
 {
     auto xmlPtr = std::make_unique<juce::XmlElement> ("Groovebox");
     auto& xml = *xmlPtr;
-    xml.setAttribute ("version", 3);
+    xml.setAttribute ("version", 4);
     if (auto params = apvts.copyState().createXml())
         xml.addChildElement (params.release());
 
@@ -1595,6 +1949,14 @@ std::unique_ptr<juce::XmlElement> GrooveboxProcessor::createStateXml()
         e->setAttribute ("solo", l.solo);
         e->setAttribute ("choke", l.choke);
         e->setAttribute ("out", l.out);
+        if (l.follow >= 0)
+        {
+            e->setAttribute ("follow", l.follow);
+            e->setAttribute ("fChance", l.followChance);
+            e->setAttribute ("fDelay", l.followDelay);
+            e->setAttribute ("fDrift", l.followDrift);
+            e->setAttribute ("fVel", l.followVel);
+        }
         e->setAttribute ("folder", l.folder.getFullPathName());
         e->setAttribute ("file", l.sample != nullptr ? l.sample->file.getFullPathName() : l.pendingFile.getFullPathName());
         e->setAttribute ("steps", stepsToString (l));
@@ -1638,6 +2000,8 @@ void GrooveboxProcessor::applyStateXml (const juce::XmlElement& xmlRef)
     int genre = xml->getIntAttribute ("genre", gen.genre);
     if (xml->getIntAttribute ("version", 1) < 3 && genre >= 10)
         genre += 6; // Hybrid and Free moved when six genres were added in 0.3
+    if (xml->getIntAttribute ("version", 1) < 4 && genre >= 16)
+        genre += 3; // Hybrid, Free and Reference moved when three foliage genres were added in 0.7
     gen.genre     = juce::jlimit (0, (int) NumGenres - 1, genre);
     gen.bars      = juce::jlimit (1, 64, xml->getIntAttribute ("bars", 1));
     previewBpm    = juce::jlimit (40.0, 300.0, xml->getDoubleAttribute ("previewBpm", genreBpm (gen.genre)));
@@ -1727,6 +2091,11 @@ void GrooveboxProcessor::applyStateXml (const juce::XmlElement& xmlRef)
             l.solo        = e->getBoolAttribute ("solo");
             l.choke       = juce::jlimit (0, 4, e->getIntAttribute ("choke"));
             l.out         = juce::jlimit (-1, kNumOuts - 1, e->getIntAttribute ("out", -1));
+            l.follow       = juce::jlimit (-1, kMaxLanes - 1, e->getIntAttribute ("follow", -1));
+            l.followChance = (float) e->getDoubleAttribute ("fChance", 0.35);
+            l.followDelay  = (float) e->getDoubleAttribute ("fDelay", 40.0);
+            l.followDrift  = (float) e->getDoubleAttribute ("fDrift", 0.35);
+            l.followVel    = (float) e->getDoubleAttribute ("fVel", 0.5);
             stepsFromString (l, e->getStringAttribute ("steps"));
             pending.push_back ({ juce::File (e->getStringAttribute ("folder")), juce::File (e->getStringAttribute ("file")) });
             ++li;
@@ -1769,7 +2138,8 @@ bool GrooveboxProcessor::LaneSnap::operator== (const LaneSnap& o) const
         || decay != o.decay || attack != o.attack || reso != o.reso || swing != o.swing || humanize != o.humanize
         || level != o.level || pan != o.pan || pitch != o.pitch || cutoff != o.cutoff || filter != o.filter
         || reverse != o.reverse || mute != o.mute || solo != o.solo || lockSample != o.lockSample
-        || lockPattern != o.lockPattern || folder != o.folder || file != o.file || steps.size() != o.steps.size())
+        || lockPattern != o.lockPattern || folder != o.folder || file != o.file || steps.size() != o.steps.size()
+        || follow != o.follow || fChance != o.fChance || fDelay != o.fDelay || fDrift != o.fDrift || fVel != o.fVel)
         return false;
     for (size_t i = 0; i < steps.size(); ++i)
     {
@@ -1812,6 +2182,7 @@ GrooveboxProcessor::Snapshot GrooveboxProcessor::takeSnapshot() const
         ls.pitch = pPitch[(size_t) li]->load(); ls.cutoff = pCutoff[(size_t) li]->load();
         ls.filter = l.filter; ls.reverse = l.reverse; ls.mute = l.mute; ls.solo = l.solo;
         ls.lockSample = l.lockSample; ls.lockPattern = l.lockPattern;
+        ls.follow = l.follow; ls.fChance = l.followChance; ls.fDelay = l.followDelay; ls.fDrift = l.followDrift; ls.fVel = l.followVel;
         ls.folder = l.folder;
         ls.file = l.sample != nullptr ? l.sample->file : l.pendingFile;
         sn.lanes.push_back (std::move (ls));
@@ -1841,6 +2212,7 @@ void GrooveboxProcessor::restoreSnapshot (const Snapshot& sn)
             l.decay = ls.decay; l.attack = ls.attack; l.reso = ls.reso; l.swing = ls.swing; l.humanize = ls.humanize;
             l.filter = ls.filter; l.reverse = ls.reverse; l.mute = ls.mute; l.solo = ls.solo;
             l.lockSample = ls.lockSample; l.lockPattern = ls.lockPattern;
+            l.follow = ls.follow; l.followChance = ls.fChance; l.followDelay = ls.fDelay; l.followDrift = ls.fDrift; l.followVel = ls.fVel;
 
             const juce::File currentFile = l.sample != nullptr ? l.sample->file : l.pendingFile;
             if (ls.folder != l.folder || newSlot)

@@ -290,6 +290,15 @@ std::vector<Crit> profile (Role role, int genre)
             c.push_back ({ Low, 0.4f, 1.0f, 0.1f, 1.0f, 2.0f, false });
             c.push_back ({ Pitch, 30.0f, 160.0f, 20.0f, 450.0f, 1.5f, true });
             break;
+        case Role::Foley:
+            c.push_back ({ Dur, 0.03f, 1.5f, 0.01f, 4.0f, 2.0f, true });
+            break;
+        case Role::Bed:
+            c.push_back ({ Dur, 2.0f, 600.0f, 0.8f, 3600.0f, 3.0f, true });
+            break;
+        case Role::Vox:
+            c.push_back ({ Dur, 0.15f, 8.0f, 0.05f, 30.0f, 2.0f, true });
+            break;
         case Role::Other:
         case Role::NumRoles:
             break;
@@ -370,7 +379,8 @@ Fit fitScore (const Features& f, Role role, int genre)
     if (worst != nullptr && fit.score < 85)
         fit.reason = problem (*worst, f) + " for " + target;
     else
-        fit.reason = "good " + target + ": " + describe (f, crits[0].feat) + ", " + describe (f, crits[juce::jmin ((size_t) 1, crits.size() - 1)].feat);
+        fit.reason = "good " + target + ": " + describe (f, crits[0].feat)
+                   + (crits.size() > 1 ? ", " + describe (f, crits[1].feat) : juce::String());
 
     return fit;
 }

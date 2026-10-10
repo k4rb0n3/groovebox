@@ -139,6 +139,13 @@ public:
     void loadSampleIndex (int lane, int index);
     void scanLibrary (const juce::File& root);
 
+    // Starter kit: sets up the lanes a genre needs (core drums, foley followers, beds), keeping
+    // samples you already have for those roles and filling the rest from your library.
+    void applyStarterKit (int genre);
+    // Randomize all: new instruments from your library, new samples, new patterns (locked lanes stay).
+    void randomizeAll();
+    int  libraryFolderCount() const { return (int) libraryDirs.size(); }
+
     void generateAll();
     void generateLane (int lane);
     void mutateAll();
@@ -186,6 +193,8 @@ private:
         cg::FilterType filter = cg::FilterType::Off;
         bool reverse = false, mute = false, solo = false, lockSample = false, lockPattern = false;
         juce::File folder, file;
+        int follow = -1;
+        float fChance = 0.35f, fDelay = 40.0f, fDrift = 0.35f, fVel = 0.5f;
         bool operator== (const LaneSnap&) const;
     };
     struct Snapshot
@@ -226,6 +235,9 @@ private:
     struct PendingOff { int samplesLeft = 0, channel = 1, note = 60; };
 
     std::array<Voice, 128> voices;
+    struct BedState { double pos = 0.0; float gain = 0.0f; float ic1[2] {}, ic2[2] {}; };
+    std::array<BedState, cg::kMaxLanes> beds;
+    void renderBeds (std::array<float*, cg::kNumOuts>& outL, std::array<float*, cg::kNumOuts>& outR, int n, bool running, bool song);
     std::array<PendingOff, 512> pendingOffs;
     int numPendingOffs = 0;
     juce::MidiBuffer midiOut;
@@ -248,6 +260,9 @@ private:
 
     void applyLaneFolder (int lane, const juce::File& folder, const juce::Array<juce::File>& files,
                           bool guessRoleFromName, const juce::File& preferredFile);
+    std::vector<std::pair<juce::File, juce::Array<juce::File>>> libraryDirs; // last library scan
+    void withLibrary (std::function<void()> then);   // makes sure libraryDirs is filled, then calls `then`
+    void fillEmptyLanesFromLibrary();
     void applyLibrary (const juce::File& root, const std::vector<std::pair<juce::File, juce::Array<juce::File>>>& dirs);
     static std::vector<std::pair<juce::File, juce::Array<juce::File>>> findLibraryFolders (const juce::File& root);
 

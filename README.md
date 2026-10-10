@@ -43,9 +43,17 @@ Clicking the box opens the **Groove panel** at the bottom: every 16th of the ref
 
 Ctrl+Z undoes a copy. Genre **From reference groove** + **Generate** also writes patterns from where the reference hits. The feel goes along when you send lanes to FL, and it's saved with setups and projects.
 
+## Foliage: foley, followers and beds
+
+- **Followers**: in the lane editor set **Plays** to "Right after lane N". The lane answers that lane's hits a few ms later, off the grid (a rustle completing the snare, a tick trailing the kick). Set how often, how many ms after, the drift (timing, sample start, pitch) and the level compared to the hit.
+- **Foley** lanes: sparse, quiet hits on 1/32 steps nudged off the grid, a different bit of the sample each time, different every bar.
+- **Beds**: the sample loops underneath everything while the music runs (crackle, rain, room tone, hiss) and fades with song sections.
+- **Starter kit** (top bar): the lanes a genre needs, with followers and beds. Keeps samples you already picked for those instruments and fills the rest from your library (folders named foley, vinyl, crackle, rain, vocal... are recognised).
+- **Randomize all**: new instruments from your library, new samples and new patterns in one go. Locked lanes stay.
+
 ## Genres and tempo
 
-House, Deep House, Tech House, Minimal, Techno, Dub Techno, Breaks, UK Garage, IDM, Ambient, Drum & Bass, Jungle, Dubstep / Halftime, Trap (with hat rolls), Hip-hop / Boom bap, Downtempo, plus **Hybrid**, **Free** and **From reference groove**. Picking a genre sets the **BPM** box to its typical tempo; that tempo drives Groovebox's own **Play** button. When FL plays, FL's tempo is used, so set FL to match.
+House, Deep House, Tech House, Minimal, Techno, Dub Techno, Breaks, UK Garage, IDM, Ambient, Drum & Bass, Jungle, Dubstep / Halftime, Trap (with hat rolls), Hip-hop / Boom bap, Downtempo, **Microhouse**, **Deep & dusty**, **2-step / future garage** (the last three add more quiet foliage), plus **Hybrid**, **Free** and **From reference groove**. Picking a genre sets the **BPM** box to its typical tempo; that tempo drives Groovebox's own **Play** button. When FL plays, FL's tempo is used, so set FL to match.
 
 ## Send lanes to FL as their own channels
 
@@ -110,9 +118,11 @@ Right-click a sample name to **open it in Explorer** or copy its path.
 |---|---|
 | Help | Plain-language guide to every control |
 | Setups | Save, load, last session |
-| Library... / Shuffle samples / Fit filter | Map a library, re-dig every unlocked lane, skip poor fits while scrolling |
+| Library... / Shuffle samples / Randomize all | Map a library; re-dig every unlocked lane; new instruments, samples and patterns at once |
+| Settings | Density, Variation, Irregular, Swing x, Humanize x, Mutate amount, Fit filter |
+| Starter kit | Set up the lanes the genre needs (core drums, foley followers, beds) |
 | Genre | House, Deep House, Tech House, Minimal, Techno, Dub Techno, Breaks, UK Garage, IDM, Ambient, **Hybrid** (every lane borrows from a random genre), **Free** (no genre rules) |
-| Generate / Mutate + amount | New groove, or evolve the current one (pattern-locked lanes are kept) |
+| Generate / Mutate | New groove, or evolve the current one (pattern-locked lanes are kept) |
 | Density / Variation / Irregular | How busy; ghosts, velocity spread, probability and micro timing; odd lengths, odd rates and Euclidean placement |
 | Swing x / Humanize x | Scale every lane's swing and humanize (automatable) |
 | Reference groove | Loop or track to take the feel from; click it for the Groove panel |

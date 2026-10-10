@@ -8,6 +8,7 @@ enum Genre
 {
     House, DeepHouse, TechHouse, Minimal, Techno, DubTechno, Breaks, Garage, IDM, Ambient,
     DrumAndBass, Jungle, Halftime, Trap, HipHop, Downtempo,
+    Microhouse, DeepDusty, FutureGarage, // foliage-heavy: lots of quiet off-grid foley and textures
     Hybrid, // every lane borrows from a random genre
     Free,   // no genre rules, random densities and placements
     Reference, // patterns follow where a loaded reference groove plays
@@ -38,6 +39,9 @@ void mutateRange (Lane& lane, int from, int to, float amount, juce::Random& rng)
 
 // 16-step probability template for a role, read from where a reference groove plays.
 std::array<float, 16> referenceTemplate (const Groove&, Role);
+
+// How much quiet foliage (foley, followers, beds) a genre wants, 0..1.
+float genreFoliage (int g);
 
 // Guess a role from a folder or file name.
 Role guessRole (const juce::String& name);
