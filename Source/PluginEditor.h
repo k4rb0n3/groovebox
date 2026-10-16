@@ -42,7 +42,9 @@ public:
 class StepGrid : public juce::Component
 {
 public:
-    StepGrid (GrooveboxProcessor& p, const ViewState& v) : proc (p), view (v) {}
+    StepGrid (GrooveboxProcessor& p, const ViewState& v) : proc (p), view (v) { setOpaque (true); }
+    juce::Colour background { 0xff1c1e23 };
+    void playStepChanged (int newStep); // repaints just the two cells involved
     void setLane (int li) { lane = li; repaint(); }
     void setLabel (const juce::String& l, int width) { label = l; labelW = width; repaint(); }
     void paint (juce::Graphics&) override;

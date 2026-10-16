@@ -647,7 +647,16 @@ cg::Fit GrooveboxProcessor::fileFit (const juce::File& f, Role role) const
     Features feat;
     if (! analyzer.get (f, feat))
         return {};
-    return fitScore (feat, role, gen.genre);
+    auto fit = fitScore (feat, role, gen.genre);
+    // Drum lanes want one-shots: loops (by name, or far too long for the instrument) go to the back.
+    if (wantsOneShots (role))
+    {
+        if (nameLooksLikeLoop (f))
+            fit = { juce::jmin (fit.score, 10), "looks like a loop, not a one-shot" };
+        else if (feat.durSec > maxOneShotSeconds (role) * 1.5f)
+            fit = { juce::jmin (fit.score, 20), "probably a loop (" + juce::String (feat.durSec, 1) + " s long)" };
+    }
+    return fit;
 }
 
 cg::Fit GrooveboxProcessor::laneFit (int li) const
@@ -664,6 +673,13 @@ int GrooveboxProcessor::pickGoodSample (int li)
     const int count = lane.files.size();
     if (count == 0) return -1;
 
+    // One-shots first: when a drum lane's folder mixes loops and one-shots, only one-shots are picked.
+    std::vector<int> oneShots;
+    if (wantsOneShots (lane.role))
+        for (int i = 0; i < count; ++i)
+            if (! nameLooksLikeLoop (lane.files.getReference (i))) oneShots.push_back (i);
+    const bool filterLoops = wantsOneShots (lane.role) && ! oneShots.empty() && (int) oneShots.size() < count;
+
     std::vector<std::pair<int, int>> scored; // (score, index)
     for (int i = 0; i < count; ++i)
     {
@@ -671,8 +687,8 @@ int GrooveboxProcessor::pickGoodSample (int li)
         if (fit.score >= 0) scored.push_back ({ fit.score, i });
     }
 
-    if (scored.size() < 3)
-        return rng.nextInt (count); // not analyzed yet: plain random
+    if (scored.size() < 3) // not analyzed yet: plain random (among the one-shots)
+        return filterLoops ? oneShots[(size_t) rng.nextInt ((int) oneShots.size())] : rng.nextInt (count);
 
     std::sort (scored.begin(), scored.end(), [] (auto& a, auto& b) { return a.first > b.first; });
 
@@ -868,7 +884,11 @@ void GrooveboxProcessor::applyLaneFolder (int li, const juce::File& folder, cons
     else
     {
         const int preferred = preferredFile != juce::File() ? files.indexOf (preferredFile) : -1;
-        loadSampleIndex (li, preferred >= 0 ? preferred : 0);
+        int first = 0; // the first one-shot, not a loop, for drum lanes
+        if (preferred < 0 && wantsOneShots (lanes[(size_t) li].role))
+            for (int i = 0; i < files.size(); ++i)
+                if (! nameLooksLikeLoop (files.getReference (i))) { first = i; break; }
+        loadSampleIndex (li, preferred >= 0 ? preferred : first);
     }
 
     analyzer.enqueue (files, files.isEmpty() ? juce::File() : files[juce::jmax (0, lanes[(size_t) li].fileIndex)]);
@@ -1085,6 +1105,8 @@ void GrooveboxProcessor::withLibrary (std::function<void()> then)
     });
 }
 
+static bool isLoopDir (const juce::File& d) { return cg::nameLooksLikeLoop (d.getChildFile ("x")); }
+
 static cg::Role dirRoleOf (const juce::File& d)
 {
     auto r = cg::guessRole (d.getFileName());
@@ -1110,7 +1132,8 @@ void GrooveboxProcessor::fillEmptyLanesFromLibrary()
         for (auto want : tryRoles)
         {
             for (size_t d = 0; d < libraryDirs.size(); ++d)
-                if (dirRoleOf (libraryDirs[d].first) == want && (best < 0 || useCount[d] < useCount[(size_t) best]))
+                if (dirRoleOf (libraryDirs[d].first) == want && ! (wantsOneShots (role) && isLoopDir (libraryDirs[d].first))
+                    && (best < 0 || useCount[d] < useCount[(size_t) best]))
                     best = (int) d;
             if (best >= 0) break;
         }
@@ -1213,6 +1236,7 @@ void GrooveboxProcessor::randomizeAll()
             for (size_t d = 0; d < libraryDirs.size(); ++d)
             {
                 const auto r = dirRoleOf (libraryDirs[d].first);
+                if (wantsOneShots (r) && isLoopDir (libraryDirs[d].first)) continue; // drum lanes: one-shot folders only
                 if (r == l.role) same.push_back ((int) d);
                 else if (isDrum (r) && isDrum (l.role) && r != Role::Kick && l.role != Role::Kick) other.push_back ((int) d);
             }
@@ -1272,7 +1296,8 @@ void GrooveboxProcessor::applyLibrary (const juce::File& root, const std::vector
     {
         if (lanes[(size_t) li].lockSample) continue;
         for (size_t d = 0; d < dirs.size(); ++d)
-            if (! used[d] && dirRole (dirs[d].first) == lanes[(size_t) li].role)
+            if (! used[d] && dirRole (dirs[d].first) == lanes[(size_t) li].role
+                && ! (wantsOneShots (lanes[(size_t) li].role) && isLoopDir (dirs[d].first)))
             {
                 assign (li, d, false);
                 break;

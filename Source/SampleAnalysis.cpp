@@ -551,4 +551,39 @@ void SampleAnalyzer::saveCache()
     f.replaceWithText (out);
 }
 
+bool nameLooksLikeLoop (const juce::File& f)
+{
+    auto check = [] (const juce::String& raw)
+    {
+        const auto s = raw.toLowerCase();
+        if (s.contains ("loop") || s.contains ("bpm") || s.contains ("groove") || s.contains ("break") || s.contains ("fill")
+            || s.contains ("top ") || s.contains ("full") || s.contains ("phrase"))
+            return true;
+        // A tempo in the name ("124", "_90_") next to a separator is a strong loop hint.
+        juce::StringArray tokens;
+        tokens.addTokens (s, " _-.()[]", "");
+        for (const auto& t : tokens)
+            if (t.containsOnly ("0123456789") && t.getIntValue() >= 70 && t.getIntValue() <= 180 && t.length() == 3 && ! s.contains ("hz"))
+                return true;
+        return false;
+    };
+    return check (f.getFileNameWithoutExtension()) || check (f.getParentDirectory().getFileName());
+}
+
+bool wantsOneShots (Role role)
+{
+    return role != Role::Bed && role != Role::Texture && role != Role::Vox && role != Role::FX && role != Role::Other;
+}
+
+float maxOneShotSeconds (Role role)
+{
+    switch (role)
+    {
+        case Role::Cymbal: case Role::Ride: return 6.0f;
+        case Role::Bass: case Role::Foley: case Role::OpenHat: return 3.5f;
+        case Role::Kick: case Role::Tom: return 2.5f;
+        default: return 2.0f;
+    }
+}
+
 } // namespace cg

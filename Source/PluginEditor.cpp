@@ -174,8 +174,23 @@ int StepGrid::stepAt (float x) const
     return start + juce::jlimit (0, count - 1, (int) ((x - (float) labelW) / cw));
 }
 
+void StepGrid::playStepChanged (int ps)
+{
+    const int old = lastDrawnPlayStep;
+    lastDrawnPlayStep = ps;
+    const auto& L = proc.lanes[(size_t) lane];
+    if (L.isBed() || L.follow >= 0) return; // no playhead drawn
+    const auto [start, count] = viewWindow (L, view.page);
+    const float cw = (float) (getWidth() - labelW) / (float) juce::jmax (1, count);
+    for (int s : { old, ps })
+        if (s >= start && s < start + count)
+            repaint (juce::Rectangle<float> ((float) labelW + (float) (s - start) * cw, 0.0f, cw, (float) getHeight())
+                         .getSmallestIntegerContainer().expanded (2, 0));
+}
+
 void StepGrid::paint (juce::Graphics& g)
 {
+    g.fillAll (background);
     const auto& L = proc.lanes[(size_t) lane];
     const auto [start, count] = viewWindow (L, view.page);
     const float cw = (float) (getWidth() - labelW) / (float) count;
@@ -1051,10 +1066,7 @@ void LaneRow::tick()
 
     const int ps = proc.playStep[(size_t) lane].load();
     if (ps != grid.lastDrawnPlayStep)
-    {
-        grid.lastDrawnPlayStep = ps;
-        grid.repaint();
-    }
+        grid.playStepChanged (ps);
 
     const int bar = proc.displayBar();
     const bool nowResting = ! proc.pianoRollMode.load() && proc.songMode.load() && bar >= 0 && ! proc.laneActiveAtBar (lane, bar);
@@ -1209,6 +1221,7 @@ LaneEditor::LaneEditor (GrooveboxProcessor& p, ViewState& v) : proc (p), view (v
         addAndMakeVisible (*strips.back());
     }
     steps.setLabel ("Steps", ParamStrip::kLabelW);
+    steps.background = kPanel;
     steps.onEdited = [this] { for (auto& s : strips) s->repaint(); if (onEdited) onEdited(); };
 
     title.setFont (juce::FontOptions (14.0f, juce::Font::bold));
@@ -1437,10 +1450,7 @@ void LaneEditor::tick()
 {
     const int ps = proc.playStep[(size_t) lane].load();
     if (ps != steps.lastDrawnPlayStep)
-    {
-        steps.lastDrawnPlayStep = ps;
-        steps.repaint();
-    }
+        steps.playStepChanged (ps);
 }
 
 void LaneEditor::paint (juce::Graphics& g)
@@ -1747,6 +1757,7 @@ HelpOverlay::HelpOverlay()
     text.setReadOnly (true);
     text.setScrollbarsShown (true);
     text.setCaretVisible (false);
+    text.setSize (1000, 700); // lay the text out at a real width: at width 0 every insert re-wraps everything (slow)
 
     auto h = [this] (const juce::String& s)
     {

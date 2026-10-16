@@ -854,6 +854,63 @@ int main (int argc, char** argv)
         p.songMode = false;
     }
 
+    // 26. One-shots before loops
+    {
+        CHECK (cg::nameLooksLikeLoop (juce::File ("/x/Drum Loops/kick_a.wav")) && cg::nameLooksLikeLoop (juce::File ("/x/hats/hat_loop_01.wav"))
+               && cg::nameLooksLikeLoop (juce::File ("/x/perc/perc_124_bpm.wav")) && cg::nameLooksLikeLoop (juce::File ("/x/perc/shaker groove 120.wav"))
+               && ! cg::nameLooksLikeLoop (juce::File ("/x/Kicks/kick_01.wav")) && ! cg::nameLooksLikeLoop (juce::File ("/x/Snares/snare 3.wav")),
+               "loops recognised by name, one-shots not");
+        auto dir = outDir.getChildFile ("mixed-hats");
+        dir.deleteRecursively();
+        dir.createDirectory();
+        for (auto* src : { "hat_loop_124.wav", "hat_loop_120.wav", "hat_loop_126.wav", "hat_01.wav" })
+            root.getChildFile ("Hats").getChildFile ("Closed Hats").findChildFiles (juce::File::findFiles, false, "*.wav")[0].copyFileTo (dir.getChildFile (src));
+        GrooveboxProcessor h; h.runSynchronously = true;
+        h.lanes[3].role = cg::Role::ClosedHat;
+        h.setLaneFolder (3, dir, false);
+        bool onlyOneShots = h.lanes[3].sample != nullptr && h.lanes[3].sample->file.getFileName() == "hat_01.wav";
+        for (int i = 0; i < 20; ++i)
+        {
+            h.randomSample (3);
+            onlyOneShots = onlyOneShots && h.lanes[3].sample != nullptr && h.lanes[3].sample->file.getFileName() == "hat_01.wav";
+        }
+        CHECK (onlyOneShots, "drum lanes load and pick the one-shot, never the loops");
+        dir.deleteRecursively();
+    }
+
+    // 25. Performance: audio and drawing cost
+    if (juce::SystemStats::getEnvironmentVariable ("GB_BENCH", {}).isNotEmpty())
+    {
+        GrooveboxProcessor b;
+        b.runSynchronously = true;
+        FakeHead bh;
+        b.setPlayHead (&bh);
+        b.scanLibrary (root);
+        b.applyStarterKit (cg::FutureGarage);
+        b.prepareToPlay (48000.0, 512);
+        juce::AudioBuffer<float> buf (b.getTotalNumOutputChannels(), 512);
+        juce::MidiBuffer mb;
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const int blocks = 2000;
+        for (int i = 0; i < blocks; ++i) { bh.ppq += 512.0 / 48000.0 * 124.0 / 60.0; b.processBlock (buf, mb); mb.clear(); }
+        const auto ms = juce::Time::getMillisecondCounterHiRes() - t0;
+        const double realMs = blocks * 512.0 / 48000.0 * 1000.0;
+        std::cout << "  BENCH audio: " << ms << " ms for " << realMs << " ms of audio = " << (100.0 * ms / realMs) << "% of one core\n";
+
+        const auto tE = juce::Time::getMillisecondCounterHiRes();
+        std::unique_ptr<juce::AudioProcessorEditor> ed (b.createEditor());
+        std::cout << "  BENCH open editor: " << (juce::Time::getMillisecondCounterHiRes() - tE) << " ms\n";
+        ed->setSize (1460, 960);
+        juce::Image img (juce::Image::ARGB, 1460, 960, true);
+        const auto t1 = juce::Time::getMillisecondCounterHiRes();
+        for (int i = 0; i < 20; ++i) { juce::Graphics g (img); ed->paintEntireComponent (g, true); }
+        std::cout << "  BENCH full repaint: " << (juce::Time::getMillisecondCounterHiRes() - t1) / 20.0 << " ms\n";
+        const auto t2 = juce::Time::getMillisecondCounterHiRes();
+        int ticks = 0;
+        while (juce::Time::getMillisecondCounterHiRes() - t2 < 3000) { juce::MessageManager::getInstance()->runDispatchLoopUntil (50); ++ticks; }
+        std::cout << "  BENCH idle editor 3 s done\n";
+    }
+
     // 8. UI snapshot
     if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() != nullptr)
     {

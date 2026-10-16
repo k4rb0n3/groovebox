@@ -28,6 +28,11 @@ struct Fit
 };
 
 Fit fitScore (const Features&, Role role, int genre);
+
+// Loops vs one-shots: by name ("loop", "120bpm", a "Loops" folder) and, once analyzed, by length.
+bool nameLooksLikeLoop (const juce::File&);
+bool wantsOneShots (Role role);              // drums and foley; beds, textures and vocals may be loops
+float maxOneShotSeconds (Role role);
 juce::String noteName (float hz);
 
 // Analyzes files on a background thread and caches the results in

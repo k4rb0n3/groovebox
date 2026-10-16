@@ -89,6 +89,7 @@ Groovebox listens to every sample in your folders (tail length, attack, brightne
 - **Green** dot: good fit, **yellow**: usable, **red**: poor fit, **hollow**: still listening.
 - Hover the sample name for the reason ("too long (820 ms) for Techno Closed Hat") and the detected note for pitched sounds (shown in FL's octave naming, middle C = C5).
 - **?** and **Shuffle samples** favour good fits. **Fit filter** makes scrolling skip poor fits.
+- Drum and foley lanes go for **one-shots**: loops ("loop", a tempo like 124 or "bpm" in the name, a Loops folder, or far too long for the instrument) are rated poor and never picked by Shuffle, ?, Randomize all or a new folder. Beds and vocals may be loops.
 - Changing the genre re-rates everything. Results are cached in `Documents\Groovebox`, so a library is only analyzed once.
 
 ## Locks
