@@ -932,13 +932,26 @@ void GrooveboxProcessor::stepSample (int li, int delta)
     const int count = lane.files.size();
     int idx = lane.fileIndex + delta;
 
-    // With the fit filter on, skip samples known to fit poorly (unanalyzed ones still show).
-    if (fitFilter)
+    // Skip loops in drum lanes (by name, or far too long once analyzed), and with the fit filter on,
+    // anything known to fit poorly (unanalyzed ones still show).
+    const bool skipLoops = hideLoops && wantsOneShots (lane.role);
+    if (fitFilter || skipLoops)
         for (int tries = 0; tries < count; ++tries)
         {
             const int wrapped = ((idx % count) + count) % count;
-            const auto fit = fileFit (lane.files.getReference (wrapped), lane.role);
-            if (fit.score < 0 || fit.score >= 50) break;
+            const auto& f = lane.files.getReference (wrapped);
+            bool skip = false;
+            if (skipLoops)
+            {
+                Features feat;
+                skip = nameLooksLikeLoop (f) || (analyzer.get (f, feat) && feat.durSec > maxOneShotSeconds (lane.role) * 1.5f);
+            }
+            if (! skip && fitFilter)
+            {
+                const auto fit = fileFit (f, lane.role);
+                skip = fit.score >= 0 && fit.score < 50;
+            }
+            if (! skip) break;
             idx += delta;
         }
 
@@ -1941,6 +1954,7 @@ std::unique_ptr<juce::XmlElement> GrooveboxProcessor::createStateXml()
     xml.setAttribute ("library", libraryRoot.getFullPathName());
     xml.setAttribute ("exportBars", exportBars);
     xml.setAttribute ("fitFilter", fitFilter);
+    xml.setAttribute ("hideLoops", hideLoops);
     xml.setAttribute ("bars", gen.bars);
     xml.setAttribute ("previewBpm", previewBpm.load());
     xml.setAttribute ("songMode", songMode.load());
@@ -2078,6 +2092,7 @@ void GrooveboxProcessor::applyStateXml (const juce::XmlElement& xmlRef)
     libraryRoot   = juce::File (xml->getStringAttribute ("library"));
     exportBars    = juce::jlimit (1, 64, xml->getIntAttribute ("exportBars", 4));
     fitFilter     = xml->getBoolAttribute ("fitFilter", false);
+    hideLoops     = xml->getBoolAttribute ("hideLoops", true);
     {
         cg::Groove g;
         if (xml->hasAttribute ("grooveData"))

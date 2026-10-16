@@ -70,6 +70,7 @@ public:
     juce::File libraryRoot;
     int exportBars = 4;
     bool fitFilter = false; // scrolling skips samples that clearly don't fit
+    bool hideLoops = true;  // scrolling in drum lanes skips loops
 
     std::atomic<int> modelVersion { 0 };
 

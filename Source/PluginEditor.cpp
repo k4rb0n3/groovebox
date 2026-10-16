@@ -704,12 +704,29 @@ void SampleSlot::paint (juce::Graphics& g)
     Features feat;
     const bool analyzed = L.sample != nullptr && proc.fileFeatures (L.sample->file, feat);
 
-    auto right = inner.removeFromRight (56);
+    auto right = inner.removeFromRight (86);
     g.setFont (juce::FontOptions (10.5f));
     g.setColour (kDim);
+    auto topRight = right.removeFromTop (right.getHeight() / 2);
     if (count > 0)
-        g.drawText (juce::String (L.fileIndex + 1) + "/" + juce::String (count), right.removeFromTop (right.getHeight() / 2),
-                    juce::Justification::bottomRight, false);
+    {
+        const auto countText = juce::String (L.fileIndex + 1) + "/" + juce::String (count);
+        g.drawText (countText, topRight, juce::Justification::bottomRight, false);
+        topRight.removeFromRight (juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), countText) + 6);
+    }
+    if (L.sample != nullptr)
+    {
+        // Sample length, so loops stand out: amber when it's long for the instrument, red when it looks like a loop.
+        const double secs = analyzed ? (double) feat.durSec
+                                     : (double) L.sample->buffer.getNumSamples() / juce::jmax (1.0, L.sample->sampleRate);
+        const bool loopName = nameLooksLikeLoop (L.sample->file);
+        const bool oneShotLane = wantsOneShots (L.role);
+        const bool tooLong = oneShotLane && secs > (double) maxOneShotSeconds (L.role) * 1.5;
+        juce::String len = secs < 1.0 ? juce::String (juce::roundToInt (secs * 1000.0)) + " ms" : juce::String (secs, secs < 10.0 ? 1 : 0) + " s";
+        if (oneShotLane && loopName) len = "loop " + len;
+        g.setColour (oneShotLane && loopName ? juce::Colour (0xffe06a5a) : tooLong ? juce::Colour (0xffe0b04a) : kDim);
+        g.drawText (len, topRight, juce::Justification::bottomRight, false);
+    }
     if (L.sample != nullptr)
     {
         auto dotRow = right;
@@ -2179,6 +2196,9 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     settings.addRow (humScale, "Scales every lane's humanize (automatable in FL)");
     settings.addRow (mutateAmt, "How much Mutate changes the groove");
     settings.addRow (fitFilterBtn, "Scrolling skips samples rated a poor fit for the lane");
+    settings.addRow (hideLoopsBtn, "Drum and foley lanes skip loops when you scroll (beds and vocals don't)");
+    hideLoopsBtn.setClickingTogglesState (true);
+    hideLoopsBtn.onClick = [this] { proc.hideLoops = hideLoopsBtn.getToggleState(); };
     addChildComponent (settings);
     settingsBtn.setTooltip ("Density, Variation, Irregular, Swing, Humanize, Mutate amount, Fit filter");
     settingsBtn.onClick = [this] { settings.setVisible (! settings.isVisible()); settings.toFront (false); };
@@ -2663,6 +2683,7 @@ void GrooveboxEditor::syncRows()
     songBtn.setToggleState (proc.songMode.load(), juce::dontSendNotification);
     bpmBox.setValue (juce::roundToInt (proc.previewBpm.load()), false);
     fitFilterBtn.setToggleState (proc.fitFilter, juce::dontSendNotification);
+    hideLoopsBtn.setToggleState (proc.hideLoops, juce::dontSendNotification);
     density.setValue (proc.gen.density, juce::dontSendNotification);
     variation.setValue (proc.gen.variation, juce::dontSendNotification);
     irregular.setValue (proc.gen.irregular, juce::dontSendNotification);

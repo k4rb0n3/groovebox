@@ -358,7 +358,7 @@ private:
     juce::Label title, byline, status, bpmLabel, pageLabel;
     juce::TextButton helpBtn { "Help" }, setupsBtn { "Setups" }, libraryBtn { "Library..." }, shuffleBtn { "Shuffle samples" },
                      fitFilterBtn { "Fit filter" }, generateBtn { "Generate" }, mutateBtn { "Mutate" }, previewBtn { "Play" },
-                     settingsBtn { "Settings" }, randomBtn { "Randomize all" }, kitBtn { "Starter kit" },
+                     settingsBtn { "Settings" }, hideLoopsBtn { "Skip loops" }, randomBtn { "Randomize all" }, kitBtn { "Starter kit" },
                      seqBtn { "Sequencer" }, addLaneBtn { "+ Add lane" },
                      songBtn { "Song" }, makeSongBtn { "Make song" }, pagePrev { "<" }, pageNext { ">" }, followBtn { "Follow" },
                      editorBtn { "Lane editor" };
