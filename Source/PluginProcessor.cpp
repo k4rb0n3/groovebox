@@ -1044,45 +1044,121 @@ struct KitLane
     float levelDb = -6.0f;
 };
 
+// Default level per instrument in a kit (dB).
+float kitLevel (cg::Role r)
+{
+    using R = cg::Role;
+    switch (r)
+    {
+        case R::Kick: return -6.0f;   case R::Snare: return -8.0f;   case R::Clap: return -9.0f;
+        case R::ClosedHat: return -10.0f; case R::OpenHat: return -13.0f; case R::Ride: return -14.0f;
+        case R::Shaker: return -15.0f; case R::Perc: return -12.0f;  case R::Rim: return -12.0f;
+        case R::Tom: return -11.0f;   case R::Click: return -15.0f;  case R::Bass: return -8.0f;
+        case R::Foley: return -15.0f; case R::Bed: return -22.0f;    case R::Texture: return -20.0f;
+        case R::FX: return -16.0f;    case R::Vox: return -11.0f;    default: return -12.0f;
+    }
+}
+
+// A kit lane playing its own steps.
+KitLane K (cg::Role r, const char* name) { KitLane k { r, name }; k.levelDb = kitLevel (r); return k; }
+// A follower: answers lane `leader` (index in the kit) `ms` later, `chance` of the time.
+KitLane F (const char* name, int leader, float chance, float ms, float vel = 0.45f, float drift = 0.4f)
+{
+    KitLane k { cg::Role::Foley, name, leader, chance, ms, drift, vel };
+    k.levelDb = kitLevel (cg::Role::Foley);
+    return k;
+}
+
 std::vector<KitLane> starterKit (int genre)
 {
     using R = cg::Role;
     switch (genre)
     {
+        case cg::House:
+            return { K (R::Kick, "Kick"), K (R::Clap, "Clap"), K (R::ClosedHat, "Hat"), K (R::OpenHat, "Open hat"),
+                     K (R::Shaker, "Shaker"), K (R::Perc, "Perc"), K (R::Rim, "Rim"), K (R::Bass, "Bass"),
+                     F ("Foley after clap", 1, 0.3f, 35.0f), K (R::Bed, "Vinyl bed") };
+        case cg::DeepHouse:
+            return { K (R::Kick, "Kick"), K (R::Clap, "Soft clap"), K (R::Rim, "Rim"), K (R::ClosedHat, "Hat"),
+                     K (R::OpenHat, "Open hat"), K (R::Shaker, "Shaker"), K (R::Perc, "Conga / perc"), K (R::Bass, "Bass"),
+                     F ("Foley after rim", 2, 0.35f, 30.0f), K (R::Foley, "Foley loose"), K (R::Bed, "Vinyl bed") };
+        case cg::TechHouse:
+            return { K (R::Kick, "Kick"), K (R::Clap, "Clap"), K (R::ClosedHat, "Hat"), K (R::OpenHat, "Open hat"),
+                     K (R::Perc, "Perc"), K (R::Perc, "Perc 2"), K (R::Rim, "Rim"), K (R::Shaker, "Shaker"),
+                     K (R::Bass, "Bass"), F ("Foley after kick", 0, 0.2f, 60.0f, 0.35f) };
+        case cg::Minimal:
+            return { K (R::Kick, "Kick"), K (R::Clap, "Clap"), K (R::ClosedHat, "Hat"), K (R::Click, "Clicks"),
+                     K (R::Rim, "Rim"), K (R::Perc, "Perc"), K (R::Shaker, "Shaker"),
+                     F ("Foley after rim", 4, 0.35f, 25.0f), K (R::Foley, "Foley loose"), K (R::Bed, "Room bed") };
+        case cg::Techno:
+            return { K (R::Kick, "Kick"), K (R::Bass, "Rumble"), K (R::Clap, "Clap"), K (R::ClosedHat, "Hat"),
+                     K (R::OpenHat, "Open hat"), K (R::Ride, "Ride"), K (R::Perc, "Perc"), K (R::Click, "Ticks"),
+                     F ("Foley after kick", 0, 0.15f, 90.0f, 0.3f), K (R::FX, "FX"), K (R::Bed, "Hiss bed") };
+        case cg::DubTechno:
+            return { K (R::Kick, "Kick"), K (R::Rim, "Rim"), K (R::ClosedHat, "Hat"), K (R::Shaker, "Shaker"),
+                     K (R::Perc, "Perc"), K (R::Bass, "Sub"), K (R::Texture, "Chord stab / texture"),
+                     F ("Foley after rim", 1, 0.3f, 70.0f, 0.35f, 0.6f), K (R::Bed, "Crackle bed"), K (R::Bed, "Hiss bed") };
+        case cg::Breaks:
+            return { K (R::Kick, "Kick"), K (R::Snare, "Snare"), K (R::ClosedHat, "Hat"), K (R::OpenHat, "Open hat"),
+                     K (R::Ride, "Ride"), K (R::Perc, "Perc"), K (R::Tom, "Tom"), K (R::Bass, "Bass"),
+                     F ("Foley after snare", 1, 0.3f, 30.0f) };
+        case cg::Garage:
+            return { K (R::Kick, "Kick"), K (R::Snare, "Snare"), K (R::Clap, "Clap"), K (R::ClosedHat, "Hat"),
+                     K (R::Shaker, "Shaker"), K (R::Rim, "Rim"), K (R::Perc, "Perc"), K (R::Bass, "Bass"),
+                     K (R::Vox, "Vocal chops"), F ("Foley after snare", 1, 0.35f, 30.0f) };
+        case cg::IDM:
+            return { K (R::Kick, "Kick"), K (R::Snare, "Snare"), K (R::Click, "Clicks"), K (R::Click, "Glitches"),
+                     K (R::ClosedHat, "Hat"), K (R::Rim, "Rim"), K (R::Perc, "Perc"), K (R::Bass, "Bass"),
+                     F ("Foley after clicks", 2, 0.4f, 20.0f, 0.5f, 0.7f), F ("Foley after snare", 1, 0.3f, 120.0f, 0.35f, 0.7f),
+                     K (R::Foley, "Foley loose"), K (R::Texture, "Texture"), K (R::Bed, "Bed") };
+        case cg::Ambient:
+            return { K (R::Kick, "Soft kick"), K (R::Rim, "Rim"), K (R::Shaker, "Shaker"), K (R::Texture, "Texture"),
+                     K (R::Foley, "Foley loose"), K (R::Foley, "Foley loose 2"), F ("Foley after rim", 1, 0.4f, 150.0f, 0.4f, 0.8f),
+                     K (R::Bed, "Rain bed"), K (R::Bed, "Room bed"), K (R::Vox, "Voice") };
+        case cg::DrumAndBass:
+            return { K (R::Kick, "Kick"), K (R::Snare, "Snare"), K (R::ClosedHat, "Hat"), K (R::Ride, "Ride"),
+                     K (R::Shaker, "Shaker"), K (R::Perc, "Perc"), K (R::Bass, "Bass"),
+                     F ("Foley after snare", 1, 0.3f, 25.0f), K (R::Bed, "Bed") };
+        case cg::Jungle:
+            return { K (R::Kick, "Kick"), K (R::Snare, "Snare"), K (R::Snare, "Ghost snare"), K (R::ClosedHat, "Hat"),
+                     K (R::Ride, "Ride"), K (R::Perc, "Perc"), K (R::Tom, "Tom"), K (R::Bass, "Sub"),
+                     F ("Foley after snare", 1, 0.3f, 25.0f), K (R::Bed, "Crackle bed") };
+        case cg::Halftime:
+            return { K (R::Kick, "Kick"), K (R::Snare, "Snare"), K (R::Clap, "Clap"), K (R::ClosedHat, "Hat"),
+                     K (R::Shaker, "Shaker"), K (R::Perc, "Perc"), K (R::Bass, "808 / sub"),
+                     F ("Foley after snare", 1, 0.35f, 40.0f), K (R::FX, "FX"), K (R::Bed, "Bed") };
+        case cg::Trap:
+            return { K (R::Kick, "Kick"), K (R::Bass, "808"), K (R::Snare, "Snare"), K (R::Clap, "Clap"),
+                     K (R::ClosedHat, "Hat"), K (R::OpenHat, "Open hat"), K (R::Perc, "Perc"), K (R::FX, "FX"),
+                     K (R::Vox, "Vocal tag") };
+        case cg::HipHop:
+            return { K (R::Kick, "Kick"), K (R::Snare, "Snare"), K (R::ClosedHat, "Hat"), K (R::OpenHat, "Open hat"),
+                     K (R::Shaker, "Shaker"), K (R::Perc, "Perc"), K (R::Rim, "Rim"), K (R::Vox, "Vocal chops"),
+                     F ("Foley after snare", 1, 0.3f, 45.0f), K (R::Bed, "Vinyl bed") };
+        case cg::Downtempo:
+            return { K (R::Kick, "Kick"), K (R::Snare, "Snare"), K (R::ClosedHat, "Hat"), K (R::Shaker, "Shaker"),
+                     K (R::Perc, "Perc"), K (R::Rim, "Rim"), F ("Foley after snare", 1, 0.35f, 50.0f),
+                     K (R::Foley, "Foley loose"), K (R::Bed, "Vinyl bed"), K (R::Vox, "Voice") };
         case cg::Microhouse:
-            return { { R::Kick, "Kick" }, { R::Clap, "Clap", -1, 0, 0, 0, 0, -8 }, { R::ClosedHat, "Hat", -1, 0, 0, 0, 0, -9 },
-                     { R::OpenHat, "Open hat", -1, 0, 0, 0, 0, -12 }, { R::Shaker, "Shaker", -1, 0, 0, 0, 0, -14 },
-                     { R::Rim, "Rim", -1, 0, 0, 0, 0, -10 }, { R::Click, "Clicks", -1, 0, 0, 0, 0, -14 }, { R::Perc, "Perc", -1, 0, 0, 0, 0, -11 },
-                     { R::Foley, "Foley after rim", 5, 0.35f, 25.0f, 0.4f, 0.55f, -12 },
-                     { R::Foley, "Foley after kick", 0, 0.25f, 70.0f, 0.5f, 0.35f, -14 },
-                     { R::Foley, "Foley loose", -1, 0, 0, 0, 0, -16 },
-                     { R::Bed, "Room / vinyl bed", -1, 0, 0, 0, 0, -22 } };
+            return { K (R::Kick, "Kick"), K (R::Clap, "Clap"), K (R::ClosedHat, "Hat"), K (R::OpenHat, "Open hat"),
+                     K (R::Shaker, "Shaker"), K (R::Rim, "Rim"), K (R::Click, "Clicks"), K (R::Perc, "Perc"),
+                     F ("Foley after rim", 5, 0.35f, 25.0f, 0.55f), F ("Foley after kick", 0, 0.25f, 70.0f, 0.35f, 0.5f),
+                     K (R::Foley, "Foley loose"), K (R::Bed, "Room / vinyl bed") };
         case cg::DeepDusty:
-            return { { R::Kick, "Kick" }, { R::Clap, "Clap", -1, 0, 0, 0, 0, -8 }, { R::ClosedHat, "Hat", -1, 0, 0, 0, 0, -10 },
-                     { R::OpenHat, "Open hat", -1, 0, 0, 0, 0, -13 }, { R::Ride, "Ride", -1, 0, 0, 0, 0, -15 },
-                     { R::Shaker, "Shaker", -1, 0, 0, 0, 0, -15 }, { R::Perc, "Perc", -1, 0, 0, 0, 0, -12 }, { R::Rim, "Rim", -1, 0, 0, 0, 0, -12 },
-                     { R::Foley, "Foley after clap", 1, 0.4f, 35.0f, 0.4f, 0.5f, -12 },
-                     { R::Foley, "Foley after kick", 0, 0.3f, 80.0f, 0.5f, 0.35f, -14 },
-                     { R::Foley, "Foley loose", -1, 0, 0, 0, 0, -16 },
-                     { R::Bed, "Crackle bed", -1, 0, 0, 0, 0, -20 }, { R::Bed, "Room tone bed", -1, 0, 0, 0, 0, -24 } };
+            return { K (R::Kick, "Kick"), K (R::Clap, "Clap"), K (R::ClosedHat, "Hat"), K (R::OpenHat, "Open hat"),
+                     K (R::Ride, "Ride"), K (R::Shaker, "Shaker"), K (R::Perc, "Perc"), K (R::Rim, "Rim"),
+                     F ("Foley after clap", 1, 0.4f, 35.0f, 0.5f), F ("Foley after kick", 0, 0.3f, 80.0f, 0.35f, 0.5f),
+                     K (R::Foley, "Foley loose"), K (R::Bed, "Crackle bed"), K (R::Bed, "Room tone bed") };
         case cg::FutureGarage:
-            return { { R::Kick, "Kick" }, { R::Snare, "Snare", -1, 0, 0, 0, 0, -7 }, { R::Clap, "Clap", -1, 0, 0, 0, 0, -10 },
-                     { R::ClosedHat, "Hat", -1, 0, 0, 0, 0, -10 }, { R::Shaker, "Shaker", -1, 0, 0, 0, 0, -14 },
-                     { R::Rim, "Rim", -1, 0, 0, 0, 0, -12 }, { R::Perc, "Perc", -1, 0, 0, 0, 0, -13 },
-                     { R::Foley, "Foley after snare", 1, 0.5f, 30.0f, 0.45f, 0.55f, -11 },
-                     { R::Foley, "Foley after kick", 0, 0.3f, 70.0f, 0.5f, 0.35f, -14 },
-                     { R::Foley, "Foley after hat", 3, 0.2f, 15.0f, 0.3f, 0.4f, -16 },
-                     { R::Foley, "Foley loose", -1, 0, 0, 0, 0, -16 },
-                     { R::Bed, "Rain bed", -1, 0, 0, 0, 0, -20 }, { R::Bed, "Crackle bed", -1, 0, 0, 0, 0, -22 },
-                     { R::Vox, "Vocal chops", -1, 0, 0, 0, 0, -10 } };
-        default:
-            return { { R::Kick, "Kick" }, { R::Snare, "Snare", -1, 0, 0, 0, 0, -8 }, { R::Clap, "Clap", -1, 0, 0, 0, 0, -8 },
-                     { R::ClosedHat, "Hat", -1, 0, 0, 0, 0, -9 }, { R::OpenHat, "Open hat", -1, 0, 0, 0, 0, -12 },
-                     { R::Ride, "Ride", -1, 0, 0, 0, 0, -14 }, { R::Shaker, "Shaker", -1, 0, 0, 0, 0, -14 },
-                     { R::Perc, "Perc", -1, 0, 0, 0, 0, -11 }, { R::Rim, "Rim", -1, 0, 0, 0, 0, -12 },
-                     { R::Foley, "Foley after clap", 2, 0.3f, 35.0f, 0.4f, 0.45f, -13 },
-                     { R::Foley, "Foley loose", -1, 0, 0, 0, 0, -16 },
-                     { R::Bed, "Texture bed", -1, 0, 0, 0, 0, -22 } };
+            return { K (R::Kick, "Kick"), K (R::Snare, "Snare"), K (R::Clap, "Clap"), K (R::ClosedHat, "Hat"),
+                     K (R::Shaker, "Shaker"), K (R::Rim, "Rim"), K (R::Perc, "Perc"),
+                     F ("Foley after snare", 1, 0.5f, 30.0f, 0.55f, 0.45f), F ("Foley after kick", 0, 0.3f, 70.0f, 0.35f, 0.5f),
+                     F ("Foley after hat", 3, 0.2f, 15.0f, 0.4f, 0.3f), K (R::Foley, "Foley loose"),
+                     K (R::Bed, "Rain bed"), K (R::Bed, "Crackle bed"), K (R::Vox, "Vocal chops") };
+        default: // Hybrid, Free, From reference groove
+            return { K (R::Kick, "Kick"), K (R::Snare, "Snare"), K (R::Clap, "Clap"), K (R::ClosedHat, "Hat"),
+                     K (R::OpenHat, "Open hat"), K (R::Ride, "Ride"), K (R::Shaker, "Shaker"), K (R::Perc, "Perc"),
+                     K (R::Rim, "Rim"), F ("Foley after clap", 2, 0.3f, 35.0f), K (R::Foley, "Foley loose"), K (R::Bed, "Texture bed") };
     }
 }
 } // namespace
@@ -1226,6 +1302,10 @@ void GrooveboxProcessor::applyStarterKit (int genre)
 
     gen.genre = genre;
     previewBpm = genreBpm (genre);
+    // Reused folders get a fresh pick that fits the new genre (sample-locked lanes keep theirs).
+    for (int i = 0; i < k; ++i)
+        if (! lanes[(size_t) i].lockSample && lanes[(size_t) i].files.size() > 1)
+            loadSampleIndex (i, pickGoodSample (i));
     generateAll();
     if (songMode.load()) makeSong (songBars);
 

@@ -2215,9 +2215,12 @@ GrooveboxEditor::GrooveboxEditor (GrooveboxProcessor& p)
     kitBtn.onClick = [this]
     {
         proc.applyStarterKit (proc.gen.genre);
-        status.setText (juce::String ("Starter kit for ") + genreName (proc.gen.genre) + ": " + juce::String (proc.numLanes.load())
-                            + " lanes. Click a Foley lane to see what it follows. Ctrl+Z undoes it.",
+        juce::StringArray names;
+        for (int i = 0; i < proc.numLanes.load(); ++i) names.add (proc.lanes[(size_t) i].name);
+        status.setText (juce::String (genreName (proc.gen.genre)) + " kit (" + juce::String (proc.numLanes.load()) + " lanes): "
+                            + names.joinIntoString (", ") + ". Ctrl+Z undoes it.",
                         juce::dontSendNotification);
+        status.setTooltip (status.getText());
     };
     addChildComponent (help);
 

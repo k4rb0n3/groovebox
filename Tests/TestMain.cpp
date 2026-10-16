@@ -754,6 +754,18 @@ int main (int argc, char** argv)
         std::cout << "  kit: " << f.numLanes.load() << " lanes, " << followers << " followers, " << beds << " beds\n";
         CHECK (f.numLanes.load() >= 12 && followers >= 3 && beds >= 2 && follLane >= 0, "2-step starter kit: core drums, followers and beds");
         CHECK (f.lanes[0].sample != nullptr && f.lanes[0].name == "Kick", "kit lanes filled from the library");
+        {
+            std::set<juce::String> kits;
+            for (int g = 0; g < cg::Hybrid; ++g)
+            {
+                GrooveboxProcessor kp; kp.runSynchronously = true;
+                kp.applyStarterKit (g);
+                juce::String sig;
+                for (int i = 0; i < kp.numLanes.load(); ++i) sig << kp.lanes[(size_t) i].name << "|";
+                kits.insert (sig);
+            }
+            CHECK ((int) kits.size() == (int) cg::Hybrid, "every genre has its own starter kit (" + juce::String ((int) kits.size()) + " different)");
+        }
 
         // A follower answers its leader's hits, a little later, quieter.
         auto& leader = f.lanes[(size_t) snareLane];
